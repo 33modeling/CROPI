@@ -1,6 +1,7 @@
-# CROPI — cloud VM setup (2× RTX 4090)
+# CROPI — cloud VM setup (defaults for 2× RTX 4090, adapts to any GPU count)
 
-End-to-end setup for running the CROPI select→RL loop on a plain GPU VM. This is the
+End-to-end setup for running the CROPI select→RL loop on a plain GPU VM.
+Defaults target a 2× RTX 4090 (24GB) box; §4 shows the one-liner to adapt to any GPU count. This is the
 fork's scripted layer (`scripts/setup_env.sh` + `scripts/install.sh`) on top of the
 upstream pipeline (`cropi/scripts/run_cropi.sh`). All heavy artefacts — uv venvs,
 models, data, HF cache, checkpoints — live under one workspace (`$CROPI_WORK`) so the
@@ -34,6 +35,7 @@ source scripts/setup_env.sh            # derives venvs/models/data/cache under $
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git build-essential tmux   # fresh image
+nvidia-smi                             # confirm the driver sees your GPUs (and note how many)
 bash scripts/install.sh all            # bootstraps uv, then builds the cropi + verl envs
 ```
 - **cropi** is installed exactly per the upstream README (torch 2.4.0 cu124, `-e .`,
@@ -105,7 +107,18 @@ NUM_RL_ROUNDS=2 \
 bash cropi/scripts/run_cropi.sh full "$DATA_ROOT" Qwen2.5-1.5B-Instruct_curriculum
 ```
 
-`setup_env.sh` already exports the 2×4090 defaults, so you don't repeat them:
+**Different GPU count?** The defaults assume 2 GPUs. On an `N`-GPU machine set both the
+RL world size and the gradient-shard fan-out to `N` before running (they must match — see
+the `NUM_PARALLEL` note below):
+
+```bash
+export RL_NUM_GPUS=N NUM_PARALLEL=N     # e.g. N=4 or N=8
+# larger VRAM (A100 80GB) can also raise the micro-batches back toward the paper values:
+export RL_PPO_MICRO_BATCH_SIZE_PER_GPU=16 RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU=16
+# a >1.5B base that won't fit one GPU also needs RL_TP_SIZE>1 (vLLM tensor-parallel)
+```
+
+`setup_env.sh` already exports the 2×4090 defaults, so on a 2-GPU box you don't repeat them:
 
 | knob | 2×4090 default | paper (8×A100) | why |
 |---|---|---|---|
