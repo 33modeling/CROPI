@@ -12,6 +12,37 @@
 
 Paper: **[Data-Efficient RLVR via Off-Policy Influence Guidance](https://arxiv.org/abs/2510.26491)**
 
+> **Fork note (`33modeling/CROPI`).** This fork adds a scripted cloud-VM setup layer
+> (`scripts/setup_env.sh` + `scripts/install.sh`) on top of the upstream pipeline —
+> one workspace disk for all heavy artefacts, two isolated envs (`cropi` for
+> scoring/selection, `verl` for RL), and defaults tuned for a **2× RTX 4090 (24GB)** VM
+> instead of the paper's 8×A100. See **[SETUP.md](SETUP.md)** and the Quickstart below.
+> Upstream: [thu-coai/CROPI](https://github.com/thu-coai/CROPI).
+
+## Cloud VM quickstart (fork) 🖥️
+
+Full guide + data layout + per-knob notes in **[SETUP.md](SETUP.md)**.
+
+```bash
+git clone git@github.com:33modeling/CROPI.git && cd CROPI
+export GROUP_VOLUME=/mnt/data                 # plain VM has no /group-volume; use any large disk
+source scripts/setup_env.sh                   # paths, HF-cache redirect, 2x4090 defaults, cropi_activate
+bash scripts/install.sh all                   # bootstraps uv; builds the cropi + verl envs
+cropi_activate && huggingface-cli download "$HFID_BASE_MODEL" --local-dir "$BASE_MODEL_PATH"
+# prepare data/<dataset>/<model>/... (parquet + rollout jsonl + grad shards — see SETUP.md §3)
+bash cropi/scripts/run_cropi.sh select-only "$DATA_ROOT" Qwen2.5-1.5B-Instruct_curriculum   # start here
+BASE_MODEL_PATH="$BASE_MODEL_PATH" RL_PYTHON="$RL_PYTHON" \
+  bash cropi/scripts/run_cropi.sh full "$DATA_ROOT" Qwen2.5-1.5B-Instruct_curriculum         # select->RL loop
+```
+
+| fork script | purpose |
+|---|---|
+| `scripts/setup_env.sh` | source once: `$CROPI_WORK` workspace, uv-env location (`UV_PROJECT_ENVIRONMENT`), `RL_PYTHON`→verl venv, HF-cache redirect, 2×4090 knob defaults, `cropi_activate`, warn-only path checks |
+| `scripts/install.sh {cropi\|verl\|all}` | bootstrap `uv`; build the two venvs on the workspace disk (cropi = upstream recipe; verl = version-sensitive, `VERL_PIP_SPEC` overridable) |
+
+> The upstream `cropi/scripts/run_cropi.sh` (`select-only`/`rl-only`/`full`) is unchanged —
+> the fork scripts just export the paths and 2-GPU defaults it reads.
+
 ## News 📣
 
 - 2025-11: CROPI repository initialized 🎉 The project was set up and organized for public release.
