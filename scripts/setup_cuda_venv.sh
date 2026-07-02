@@ -99,8 +99,10 @@ NVCC_MAJOR=$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p' | head -1)
 [[ "$NVCC_MAJOR" == "12" ]] || die "nvcc major=$NVCC_MAJOR, need 12 (set CUDA_REDIST_VER=12.4.x)"
 
 log "building fast_jl against cropi torch"
+# --no-deps is CRITICAL: without it, --force-reinstall cascades to reinstalling
+# fast_jl's torch dep and silently upgrades torch (breaking the cu124/abi match).
 _bl="$CROPI_WORK/venvs/fast_jl_build.log"
-if ! python -m pip install fast_jl --no-build-isolation --force-reinstall --no-cache-dir > "$_bl" 2>&1; then
+if ! python -m pip install fast_jl --no-build-isolation --no-deps --force-reinstall --no-cache-dir > "$_bl" 2>&1; then
   echo "----- real compiler error (from $_bl) -----" >&2
   grep -iE 'fatal error|error:|No such file|undefined reference|FAILED:|ninja: build stopped' "$_bl" | head -25 >&2
   die "fast_jl build failed — see $_bl for the full log."
