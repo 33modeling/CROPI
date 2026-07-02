@@ -61,6 +61,19 @@ for d in "$DL"/*-archive; do
   done
 done
 shopt -u nullglob
+
+# torch's ATen headers also #include cusparse.h / cublas_v2.h / etc. Those headers
+# (and libs) are already in the cropi venv as pip nvidia-* component wheels — merge
+# their include/ and lib/ into CUDA_HOME so the fast_jl compile finds them.
+NV=$(python -c "import nvidia, os; print(os.path.dirname(nvidia.__file__))" 2>/dev/null || true)
+if [[ -n "$NV" && -d "$NV" ]]; then
+  log "merging headers/libs from pip nvidia components ($NV)"
+  mkdir -p "$CH/include" "$CH/lib"
+  while IFS= read -r inc; do cp -rn "$inc/." "$CH/include/" 2>/dev/null || true; done \
+    < <(find "$NV" -type d -name include 2>/dev/null)
+  while IFS= read -r so; do ln -sf "$so" "$CH/lib/" 2>/dev/null || true; done \
+    < <(find "$NV" -type f -name '*.so*' 2>/dev/null)
+fi
 [[ -d "$CH/lib" && ! -e "$CH/lib64" ]] && ln -sfn "$CH/lib" "$CH/lib64"
 
 export CUDA_HOME="$CH"
