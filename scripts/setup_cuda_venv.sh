@@ -29,24 +29,25 @@ CUDA_VER="${CUDA_REDIST_VER:-12.4.1}"
 BASE="https://developer.download.nvidia.com/compute/cuda/redist"
 DL="$CROPI_WORK/venvs/cuda_dl"
 CH="$CROPI_WORK/venvs/cuda12_home"
-mkdir -p "$DL"
+# fresh each run so stale extracted archives (e.g. cuda_cccl) don't leak in
+rm -rf "$DL" "$CH"; mkdir -p "$DL" "$CH"
 
 log "fetching NVIDIA redist manifest (redistrib_${CUDA_VER}.json)"
 curl -fsSL "$BASE/redistrib_${CUDA_VER}.json" -o "$DL/manifest.json" \
   || die "cannot fetch manifest — try CUDA_REDIST_VER=12.4.0 (nvidia reachable? proxy?)"
 
-# Resolve the exact archive paths for the components we need.
+# Only nvcc + cudart. NOT cuda_cccl: its libcu++ <cstdlib>/<cmath> shadow the
+# system C++ headers on the -I path and break the compile; fast_jl needs neither.
 mapfile -t RELS < <(python - "$DL/manifest.json" <<'PY'
 import sys, json
 m = json.load(open(sys.argv[1]))
-for c in ("cuda_nvcc", "cuda_cudart", "cuda_cccl"):
+for c in ("cuda_nvcc", "cuda_cudart"):
     print(m[c]["linux-x86_64"]["relative_path"])
 PY
 )
-[[ ${#RELS[@]} -eq 3 ]] || die "manifest parse failed (unexpected JSON structure)"
+[[ ${#RELS[@]} -eq 2 ]] || die "manifest parse failed (unexpected JSON structure)"
 
 log "downloading + extracting: ${RELS[*]}"
-rm -rf "$CH"; mkdir -p "$CH"
 for rel in "${RELS[@]}"; do
   f="$DL/$(basename "$rel")"
   [[ -f "$f" ]] || curl -fsSL "$BASE/$rel" -o "$f" || die "download failed: $rel"
@@ -69,8 +70,9 @@ NV=$(python -c "import nvidia, os; print(os.path.dirname(nvidia.__file__))" 2>/d
 if [[ -n "$NV" && -d "$NV" ]]; then
   log "merging headers/libs from pip nvidia components ($NV)"
   mkdir -p "$CH/include" "$CH/lib"
+  # skip cuda_cccl (libcu++ headers shadow <cstdlib>/<cmath> and break the build)
   while IFS= read -r inc; do cp -rn "$inc/." "$CH/include/" 2>/dev/null || true; done \
-    < <(find "$NV" -type d -name include 2>/dev/null)
+    < <(find "$NV" -type d -name include -not -path '*cccl*' 2>/dev/null)
   while IFS= read -r so; do ln -sf "$so" "$CH/lib/" 2>/dev/null || true; done \
     < <(find "$NV" -type f -name '*.so*' 2>/dev/null)
 fi
