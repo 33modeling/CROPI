@@ -149,10 +149,17 @@ def select_prompts_valid_uniform(args, train_name: str, valid_data_names, prompt
 
 def save_selected_dataset(args, train_name: str, raw_path: str, prompt2score_dict, prompt2score, pass_rate_maps, diff_maps, valid_data_names, score_note):
     select_note = f"{score_note}_ratio{args.select_ratio}"
-    if "1.5b" in args.model_name.lower():
+    # NOTE: keep this in lockstep with run_cropi.sh:model_size_suffix() — the
+    # selected-parquet filename must match on both sides or RL can't find it.
+    lower = args.model_name.lower()
+    if "1.5b" in lower:
         select_note += "_1.5b"
-    elif "7b" in args.model_name.lower():
+    elif "7b" in lower:
         select_note += "_7b"
+    elif "9b" in lower:
+        select_note += "_9b"
+    else:
+        select_note += "_model"
 
     save_path = raw_path.replace(".parquet", f"_selected_{select_note}.parquet")
     if args.i_iter is not None:

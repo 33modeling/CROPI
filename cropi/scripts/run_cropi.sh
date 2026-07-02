@@ -13,6 +13,8 @@ Modes:
   select-only   Compute CROPI scores and select data once.
   rl-only       Run one RL round from an existing selected parquet.
   full          Run iterative CROPI: select -> RL -> select -> RL ...
+  grad-only     Compute round-0 projected gradients for the initial model.
+  baseline-full GRPO on the FULL train pool (no selection) — Arm A baseline.
 
 If mode is omitted, the script keeps backward-compatible `select-only` behavior.
 
@@ -41,11 +43,10 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 MODE=${1:-select-only}
-if [[ "${MODE}" != "select-only" && "${MODE}" != "rl-only" && "${MODE}" != "full" ]]; then
-  MODE="select-only"
-else
-  shift
-fi
+case "${MODE}" in
+  select-only|rl-only|full|grad-only|baseline-full) shift ;;
+  *) MODE="select-only" ;;
+esac
 
 DATA_ROOT=${1:-"${REPO_ROOT}/data"}
 INITIAL_MODEL_NAME=${2:-"Qwen2.5-1.5B-Instruct_curriculum"}
@@ -130,10 +131,13 @@ PY
 model_size_suffix() {
   local model_name=$1
   local lower=${model_name,,}
+  # Keep in lockstep with cropi/core/select.py:save_selected_dataset().
   if [[ "${lower}" == *"1.5b"* ]]; then
     echo "1.5b"
   elif [[ "${lower}" == *"7b"* ]]; then
     echo "7b"
+  elif [[ "${lower}" == *"9b"* ]]; then
+    echo "9b"
   else
     echo "model"
   fi
@@ -285,7 +289,10 @@ compute_grad_for_split() {
       [[ -f "${shard}" ]] || die "Missing shard ${shard}"
     fi
     local gpu=$((rank % NUM_PARALLEL))
-    run_cmd "CUDA_VISIBLE_DEVICES=${gpu} PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run cropi-get-grad --model_name_or_path '${model_path}' --base_model '${BASE_MODEL_PATH}' --rollout_data_path '${shard}' --projection_method '${PROJECTION_METHOD}' --proj_dim '${PROJ_DIM}' --model_id '${MODEL_ID}' --seed '${SEED}' --num_generations '${num_generations}' --max_completion_length '${RL_MAX_RESPONSE_LENGTH}' --beta 0.001 --epsilon 0.2 --cancel_ppo_clip --sparse_dim '${SPARSE_DIM}' > '${src_jsonl}.grad.rank${rank}.log' 2>&1 &"
+    # --offload_gradient is REQUIRED for large models: cropi-get-grad materialises
+    # the full fp32 gradient vector (params*4 bytes) before sparse indexing — for a
+    # 9B model that is ~36GB and OOMs an 80G GPU on top of policy+ref weights.
+    run_cmd "CUDA_VISIBLE_DEVICES=${gpu} PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run cropi-get-grad --model_name_or_path '${model_path}' --base_model '${BASE_MODEL_PATH}' --rollout_data_path '${shard}' --projection_method '${PROJECTION_METHOD}' --proj_dim '${PROJ_DIM}' --model_id '${MODEL_ID}' --seed '${SEED}' --num_generations '${num_generations}' --max_completion_length '${RL_MAX_RESPONSE_LENGTH}' --beta 0.001 --epsilon 0.2 --cancel_ppo_clip --offload_gradient --process_batch_size '${GRAD_PROCESS_BATCH_SIZE:-1}' --sparse_dim '${SPARSE_DIM}' > '${src_jsonl}.grad.rank${rank}.log' 2>&1 &"
     rank=$((rank + 1))
   done
   run_cmd "wait"
@@ -409,6 +416,81 @@ legacy_select_only() {
   run_score_and_select "${INITIAL_MODEL_NAME}" "0"
 }
 
+# Round-0 gradients for the initial model (full mode expects these to exist).
+grad_only() {
+  [[ -n "${BASE_MODEL_PATH}" ]] || die "BASE_MODEL_PATH is required for grad-only mode"
+  compute_gradients_for_model "${BASE_MODEL_PATH}" "${INITIAL_MODEL_NAME}"
+}
+
+# Arm A baseline: GRPO on the FULL train pool (train_qwen.parquet), no selection.
+build_full_train_files_hydra() {
+  local paths=()
+  while IFS= read -r train_name; do
+    [[ -n "${train_name}" ]] || continue
+    paths+=("${DATA_ROOT}/${train_name}/train_qwen.parquet")
+  done < <(split_csv "${TRAIN_DATA_NAMES}")
+  join_as_hydra_list "${paths[@]}"
+}
+
+run_baseline_full() {
+  [[ -n "${BASE_MODEL_PATH}" ]] || die "BASE_MODEL_PATH is required for baseline-full mode"
+  command -v "${RL_PYTHON}" >/dev/null 2>&1 || die "RL_PYTHON not found: ${RL_PYTHON}"
+
+  local train_files_hydra
+  train_files_hydra=$(build_full_train_files_hydra)
+  local val_files_hydra
+  val_files_hydra=$(build_val_files_hydra)
+  local exp_name="${BASELINE_EXP_NAME:-full}"
+  local ckpt_dir="${CKPT_ROOT}/${RL_PROJECT_NAME}/${exp_name}"
+  local logger_cfg="['console']"
+  [[ "${RL_USE_WANDB}" == "1" ]] && logger_cfg="['console','wandb']"
+
+  log "Arm A: full-data GRPO on ${train_files_hydra} (${RL_TOTAL_TRAINING_STEPS} steps)"
+  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    data.train_files=\"${train_files_hydra}\" \
+    data.val_files=\"${val_files_hydra}\" \
+    data.train_batch_size=${RL_TRAIN_BATCH_SIZE} \
+    data.max_prompt_length=${RL_MAX_PROMPT_LENGTH} \
+    data.max_response_length=${RL_MAX_RESPONSE_LENGTH} \
+    data.filter_overlong_prompts=True \
+    data.truncation='error' \
+    actor_rollout_ref.model.path='${BASE_MODEL_PATH}' \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.model.use_remove_padding=True \
+    +actor_rollout_ref.model.override_config._attn_implementation=eager \
+    actor_rollout_ref.actor.ppo_mini_batch_size=${RL_PPO_MINI_BATCH_SIZE} \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${RL_PPO_MICRO_BATCH_SIZE_PER_GPU} \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.actor.entropy_coeff=0.001 \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    +actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=${RL_TP_SIZE} \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.gpu_memory_utilization=${RL_GPU_MEMORY_UTILIZATION} \
+    actor_rollout_ref.rollout.n=${RL_N_SAMPLES} \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    algorithm.kl_ctrl.kl_coef=0.001 \
+    trainer.critic_warmup=0 \
+    trainer.logger=${logger_cfg} \
+    trainer.project_name='${RL_PROJECT_NAME}' \
+    trainer.experiment_name='${exp_name}' \
+    trainer.default_local_dir='${ckpt_dir}' \
+    trainer.n_gpus_per_node=${RL_NUM_GPUS} \
+    trainer.nnodes=1 \
+    trainer.save_freq=${RL_SAVE_FREQ} \
+    trainer.test_freq=${RL_TEST_FREQ} \
+    trainer.total_training_steps=${RL_TOTAL_TRAINING_STEPS}"
+
+  export_actor_to_hf "${ckpt_dir}/global_step_${RL_TOTAL_TRAINING_STEPS}/actor"
+}
+
 case "${MODE}" in
   select-only)
     legacy_select_only
@@ -419,6 +501,12 @@ case "${MODE}" in
     ;;
   full)
     full_pipeline
+    ;;
+  grad-only)
+    grad_only
+    ;;
+  baseline-full)
+    run_baseline_full
     ;;
   *)
     die "Unsupported mode: ${MODE}"
