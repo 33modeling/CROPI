@@ -100,6 +100,10 @@ RL_SAVE_FREQ=${RL_SAVE_FREQ:-"${RL_TOTAL_TRAINING_STEPS}"}
 RL_TEST_FREQ=${RL_TEST_FREQ:-"10"}
 RL_USE_WANDB=${RL_USE_WANDB:-"0"}
 DRY_RUN=${DRY_RUN:-"0"}
+# verl 0.8.0's default main_ppo uses the new async rollout server (needs a vllm
+# with run_headless, i.e. >=0.9). With vllm 0.8.5 use the synchronous SPMD entry
+# main_ppo_sync (verl's own deprecation notice recommends it). Override if needed.
+RL_MAIN=${RL_MAIN:-"verl.trainer.main_ppo_sync"}
 # Optional custom reward for verl (e.g. MMLU letter-match). If set, appended to the
 # main_ppo command as custom_reward_function.{path,name}.
 CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-""}
@@ -357,7 +361,7 @@ run_rl_round() {
   fi
 
   log "Running RL round ${iter_idx} with ${RL_NUM_GPUS} GPUs"
-  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m verl.trainer.main_ppo \
+  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m ${RL_MAIN} \
     algorithm.adv_estimator=grpo \
     ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
@@ -463,7 +467,7 @@ run_baseline_full() {
   [[ "${RL_USE_WANDB}" == "1" ]] && logger_cfg="['console','wandb']"
 
   log "Arm A: full-data GRPO on ${train_files_hydra} (${RL_TOTAL_TRAINING_STEPS} steps)"
-  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m verl.trainer.main_ppo \
+  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m ${RL_MAIN} \
     algorithm.adv_estimator=grpo \
     ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
