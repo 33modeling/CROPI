@@ -74,12 +74,13 @@ export RL_PPO_MINI_BATCH_SIZE="${RL_PPO_MINI_BATCH_SIZE:-128}"
 # fast_jl compiles a CUDA extension via torch.utils.cpp_extension, which requires
 # CUDA_HOME -> a real toolkit with nvcc. Best-effort autodetect; warn if missing.
 if [[ -z "${CUDA_HOME:-}" ]]; then
-  if command -v nvcc >/dev/null 2>&1; then
+  # Prefer a real system toolkit; else the pip-assembled one from setup_cuda_venv.sh.
+  for _c in /usr/local/cuda /usr/local/cuda-12.[0-9] /usr/local/cuda-12.[0-9][0-9] \
+            "${CROPI_WORK}/venvs/cuda12_home"; do
+    [[ -x "${_c}/bin/nvcc" ]] && CUDA_HOME="${_c}" && break
+  done
+  if [[ -z "${CUDA_HOME:-}" ]] && command -v nvcc >/dev/null 2>&1; then
     CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
-  else
-    for _c in /usr/local/cuda /usr/local/cuda-12.[0-9] /usr/local/cuda-12.[0-9][0-9]; do
-      [[ -x "${_c}/bin/nvcc" ]] && CUDA_HOME="${_c}" && break
-    done
   fi
 fi
 if [[ -n "${CUDA_HOME:-}" && -x "${CUDA_HOME}/bin/nvcc" ]]; then
