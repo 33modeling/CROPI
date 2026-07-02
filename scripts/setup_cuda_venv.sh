@@ -32,20 +32,26 @@ python -m pip install \
 
 NV=$(python -c "import nvidia, os; print(os.path.dirname(nvidia.__file__))")
 log "nvidia pkg root: $NV"
-[[ -x "$NV/cuda_nvcc/bin/nvcc" ]] || die "nvcc not found under $NV/cuda_nvcc/bin (wheel layout changed?)"
+# Wheel layouts vary (cuda_nvcc/bin vs cu12/bin ...), so locate nvcc dynamically.
+NVCC=$(find "$NV" -type f -name nvcc 2>/dev/null | head -1)
+[[ -n "$NVCC" ]] || die "no nvcc found anywhere under $NV (is nvidia-cuda-nvcc-cu12 installed?)"
+NVCC_BIN=$(dirname "$NVCC"); NVCC_ROOT=$(dirname "$NVCC_BIN")
+log "found nvcc: $NVCC"
 
-# --- assemble a unified CUDA_HOME from the split wheels ----------------------
+# --- assemble a unified CUDA_HOME from whatever the wheels provide -----------
 CH="$CROPI_WORK/venvs/cuda12_home"
 log "assembling CUDA_HOME at $CH"
-rm -rf "$CH"; mkdir -p "$CH/include" "$CH/lib64"
-# nvcc + its private nvvm/bin must keep their relative layout, so link whole dirs
-ln -sfn "$NV/cuda_nvcc/bin"  "$CH/bin"
-[[ -d "$NV/cuda_nvcc/nvvm" ]] && ln -sfn "$NV/cuda_nvcc/nvvm" "$CH/nvvm"
-# merge headers + libs from every wheel that has them
-for d in cuda_nvcc cuda_runtime cuda_cccl; do
-  [[ -d "$NV/$d/include" ]] && ln -sf "$NV/$d/include/"* "$CH/include/" 2>/dev/null || true
-  [[ -d "$NV/$d/lib" ]]     && ln -sf "$NV/$d/lib/"*     "$CH/lib64/"   2>/dev/null || true
-done
+rm -rf "$CH"; mkdir -p "$CH/bin" "$CH/include" "$CH/lib64"
+# nvcc + siblings from its bin/
+ln -sf "$NVCC_BIN"/* "$CH/bin/" 2>/dev/null || true
+# nvvm (cicc/libdevice) — nvcc needs it; try next to nvcc, else anywhere under $NV
+_nvvm="$NVCC_ROOT/nvvm"; [[ -d "$_nvvm" ]] || _nvvm=$(find "$NV" -type d -name nvvm 2>/dev/null | head -1)
+[[ -n "${_nvvm:-}" && -d "$_nvvm" ]] && ln -sfn "$_nvvm" "$CH/nvvm"
+# every include/ dir (nvcc crt headers, cuda_runtime.h, cccl) and every .so
+while IFS= read -r inc; do ln -sf "$inc"/* "$CH/include/" 2>/dev/null || true; done \
+  < <(find "$NV" -type d -name include 2>/dev/null)
+while IFS= read -r so; do ln -sf "$so" "$CH/lib64/" 2>/dev/null || true; done \
+  < <(find "$NV" -type f -name '*.so*' 2>/dev/null)
 
 export CUDA_HOME="$CH"
 export PATH="$CH/bin:$PATH"
