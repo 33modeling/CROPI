@@ -43,6 +43,55 @@ BASE_MODEL_PATH="$BASE_MODEL_PATH" RL_PYTHON="$RL_PYTHON" \
 > The upstream `cropi/scripts/run_cropi.sh` (`select-only`/`rl-only`/`full`) is unchanged —
 > the fork scripts just export the paths and 2-GPU defaults it reads.
 
+## A100 80G VM — step-by-step (venv, no uv) 🧩
+
+Setup order for the SR-PAI2026 cluster (4×A100 80G container: **no system CUDA
+toolkit, `uv` blocked by the proxy**). Everything heavy lives under
+`/group-volume/minsoo3.kim/cropi`; the model is at `/group-volume/nait-models/Qwen3.5-9B`,
+datasets under `/group-volume/SR-PAI2026/IT-datasets`.
+
+```bash
+# 0. code
+git clone git@github.com:33modeling/CROPI.git && cd CROPI   # or: git pull
+
+# 1. env vars + paths + 4/8-GPU knobs (source once per shell; no uv needed)
+source scripts/setup_env_a100.sh 4          # 4 or 8
+#   -> auto-detects BASE_MODEL_PATH (Qwen3*9B) and CUDA_HOME when present
+
+# 2. cropi env (scoring/selection) — plain venv + pip, NOT uv
+bash scripts/install_venv.sh cropi          # torch 2.4 cu124 + traker + transformers
+#   (the fast_jl step needs CUDA -> handled in step 3)
+
+# 3. fast_jl / CUDA  (container has no /usr/local/cuda)
+bash scripts/setup_cuda_venv.sh             # pip cu12 nvcc wheels -> assemble CUDA_HOME -> build fast_jl
+#   success prints "projection shape: (4, 64)" + "cropi env is complete"
+
+# 4. verl env (RL + vLLM) — long; run in tmux
+bash scripts/install_venv.sh verl
+
+# 5. re-source so CUDA_HOME / model are picked up, then sanity-check
+source scripts/setup_env_a100.sh 4
+cropi_activate
+bash scripts/preflight.sh                   # checks GPUs, thinking-mode, verl×Qwen3.5
+
+# 6. data + run (gsm8k: full-100% vs CROPI-10%, matched steps)
+python cropi/data_prep/prep_gsm8k.py --raw_dir "$IT_DATASETS/gsm8k" --out_dir "$DATA_ROOT/gsm8k"
+bash scripts/run_gsm8k.sh                    # DRY_RUN=1 to preview the command chain
+```
+
+**Gotchas hit on this cluster (already handled by the scripts):**
+
+| symptom | cause | fix |
+|---|---|---|
+| `uv` install 403 | `astral.sh` not whitelisted | use `install_venv.sh` (venv+pip); pipeline runs uv-free via `$CROPI_RUN` |
+| `fast_jl` `CUDA_HOME not set` | no `/usr/local/cuda` in container | `setup_cuda_venv.sh` builds a pip CUDA-12 toolkit |
+| `BASE_MODEL_PATH missing` | model is at `/group-volume/nait-models`, not `…/SR-PAI2026/…` | `setup_env_a100.sh` auto-detects; or `export BASE_MODEL_PATH=…` |
+| value doesn't change after `git pull` | stale exported vars win over `${VAR:-default}` | `unset BASE_MODEL_PATH MODELS_DIR` (or open a fresh shell) then re-source |
+| verl `NVIDIA driver too old (12020)` | node driver (CUDA 12.2) older than verl's torch build | use a newer-driver node, or pin verl's torch to a cu121 build |
+
+> `NUM_PARALLEL` **must equal** the visible GPU count (`setup_env_a100.sh N` sets it) —
+> `cropi-get-grad` pins shard *k* to `gpu = k % NUM_PARALLEL`.
+
 ## News 📣
 
 - 2025-11: CROPI repository initialized 🎉 The project was set up and organized for public release.
