@@ -25,7 +25,9 @@ source "$CROPI_VENV/bin/activate"
 TORCH_CUDA=$(python -c "import torch;print(torch.version.cuda or '')" 2>/dev/null || true)
 log "cropi venv torch CUDA = ${TORCH_CUDA:-unknown} (matching a cu12.x nvcc)"
 
-CUDA_VER="${CUDA_REDIST_VER:-12.4.1}"
+# Match (or stay below) the NODE DRIVER's CUDA version, else the driver can't JIT
+# the generated PTX ("unsupported toolchain"). Driver here = CUDA 12.2 -> nvcc 12.2.
+CUDA_VER="${CUDA_REDIST_VER:-12.2.2}"
 BASE="https://developer.download.nvidia.com/compute/cuda/redist"
 DL="$CROPI_WORK/venvs/cuda_dl"
 CH="$CROPI_WORK/venvs/cuda12_home"
@@ -99,6 +101,10 @@ NVCC_MAJOR=$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p' | head -1)
 [[ "$NVCC_MAJOR" == "12" ]] || die "nvcc major=$NVCC_MAJOR, need 12 (set CUDA_REDIST_VER=12.4.x)"
 
 log "building fast_jl against cropi torch"
+# Build NATIVE for the GPU arch (A100 = sm_80) so no runtime PTX JIT is needed;
+# override TORCH_CUDA_ARCH_LIST for other GPUs (e.g. 8.6 for A6000, 9.0 for H100).
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0}"
+log "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 # --no-deps is CRITICAL: without it, --force-reinstall cascades to reinstalling
 # fast_jl's torch dep and silently upgrades torch (breaking the cu124/abi match).
 _bl="$CROPI_WORK/venvs/fast_jl_build.log"
