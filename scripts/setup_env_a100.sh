@@ -45,15 +45,17 @@ export RESULTS_DIR="${RESULTS_DIR:-${CROPI_WORK}/results}"
 
 # Base model: the shared Qwen3.5-9B checkout (read-only).
 export MODELS_DIR="${MODELS_DIR:-${GROUP_VOLUME}/nait-models}"
-export BASE_MODEL_PATH="${BASE_MODEL_PATH:-${MODELS_DIR}/Qwen3.5-9B}"
-export HFID_BASE_MODEL="${HFID_BASE_MODEL:-Qwen/Qwen3.5-9B}"   # only used if you re-download
-# Exact name varies (case / .5 / -Instruct); if the default path is absent,
-# best-effort auto-detect a Qwen3*9B dir under nait-models.
+# Qwen2.5-7B-Instruct: vllm 0.8.5 supports it, no thinking, runs on driver 12.2.
+# (Qwen3.5-9B needs a vllm too new for this node's CUDA 12.2 driver — see README.)
+export BASE_MODEL_PATH="${BASE_MODEL_PATH:-${MODELS_DIR}/Qwen2.5-7B-Instruct}"
+export HFID_BASE_MODEL="${HFID_BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}"   # only used if you re-download
+# If the default path is absent, best-effort auto-detect (name/case varies).
+MODEL_GLOB="${MODEL_GLOB:-*qwen2.5*7b*}"
 if [[ ! -d "${BASE_MODEL_PATH}" ]]; then
   _bm=""
   for _root in "${MODELS_DIR}" "${GROUP_VOLUME}/nait-models" "${GROUP_VOLUME}/SR-PAI2026/nait-models"; do
     [[ -d "${_root}" ]] || continue
-    _bm=$(find "${_root}" -maxdepth 1 -type d -iname '*qwen3*9b*' 2>/dev/null | sort | head -1)
+    _bm=$(find "${_root}" -maxdepth 1 -type d -iname "${MODEL_GLOB}" 2>/dev/null | sort | head -1)
     [[ -n "${_bm}" ]] && break
   done
   if [[ -n "${_bm}" ]]; then
