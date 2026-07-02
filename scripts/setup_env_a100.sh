@@ -14,11 +14,13 @@
 
 # ---- GPU count (positional arg or $CROPI_GPUS; default 4) --------------------
 _CROPI_GPUS="${1:-${CROPI_GPUS:-4}}"
-if [[ "${_CROPI_GPUS}" != "4" && "${_CROPI_GPUS}" != "8" ]]; then
-  echo "[setup_env_a100] usage: source scripts/setup_env_a100.sh [4|8]  (got '${_CROPI_GPUS}')" >&2
-  return 1 2>/dev/null || exit 1
-fi
+case "${_CROPI_GPUS}" in
+  2|4|8) ;;
+  *) echo "[setup_env_a100] usage: source scripts/setup_env_a100.sh [2|4|8]  (got '${_CROPI_GPUS}')" >&2
+     return 1 2>/dev/null || exit 1 ;;
+esac
 export CROPI_GPUS="${_CROPI_GPUS}"
+# On 2 GPUs, TP=2 uses both for the vLLM rollout (7B fits fine); override RL_TP_SIZE if desired.
 
 # ---- Cluster paths (override before sourcing if a mount differs) -------------
 export GROUP_VOLUME="${GROUP_VOLUME:-/group-volume}"

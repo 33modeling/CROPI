@@ -55,8 +55,8 @@ datasets under `/group-volume/SR-PAI2026/IT-datasets`.
 git clone git@github.com:33modeling/CROPI.git && cd CROPI   # or: git pull
 
 # 1. env vars + paths + 4/8-GPU knobs (source once per shell; no uv needed)
-source scripts/setup_env_a100.sh 4          # 4 or 8
-#   -> auto-detects BASE_MODEL_PATH (Qwen3*9B) and CUDA_HOME when present
+source scripts/setup_env_a100.sh 4          # 2, 4, or 8 GPUs
+#   -> auto-detects BASE_MODEL_PATH (Qwen2.5-7B) and CUDA_HOME when present
 
 # 2. cropi env (scoring/selection) — plain venv + pip, NOT uv
 bash scripts/install_venv.sh cropi          # torch 2.4 cu124 + traker + transformers
