@@ -52,18 +52,36 @@ install_cropi() {
 }
 
 install_verl() {
-  local spec="${VERL_PIP_SPEC:-verl}"      # e.g. VERL_PIP_SPEC='verl==0.4.1'
+  # The node driver caps the CUDA MAJOR you can run (e.g. driver 535 = CUDA 12.2
+  # -> only cu12x torch works; a default `pip install verl` drags in a cu13 torch
+  # that fails with "driver too old"). So install a cu124 torch FIRST, then vllm,
+  # then verl, and finally guard that nothing bumped torch off CUDA 12.
+  local verl_spec="${VERL_PIP_SPEC:-verl}"          # e.g. VERL_PIP_SPEC='verl==0.5.0'
+  local torch_spec="${TORCH_SPEC:-torch==2.6.0}"    # newest torch that ships cu124 wheels
+  local torch_index="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
+  local vllm_spec="${VLLM_SPEC:-vllm==0.8.5}"        # vllm build matched to torch 2.6/cu124
   log "Creating verl venv at $VERL_VENV"
   "$PYTHON_BIN" -m venv "$VERL_VENV"
   # shellcheck disable=SC1091
   source "$VERL_VENV/bin/activate"
   python -m pip install --upgrade pip
-  log "installing verl ('$spec') + vllm — version-sensitive step"
-  python -m pip install "$spec" || die "verl install failed — set VERL_PIP_SPEC to a CUDA-matched version and re-run."
-  python -c "import vllm" 2>/dev/null || python -m pip install vllm || log "WARN: vllm not installed — install a verl-compatible vllm manually."
-  python -c "import verl; print('verl', getattr(verl,'__version__','?'))" \
-    && log "verl env OK ✓  ->  RL_PYTHON=$VERL_VENV/bin/python" \
-    || log "WARN: 'import verl' failed — check the log above."
+
+  log "installing $torch_spec from $torch_index (match the node driver's CUDA major)"
+  python -m pip install $torch_spec --index-url "$torch_index" || die "torch install failed"
+  log "installing $vllm_spec"
+  python -m pip install "$vllm_spec" || die "vllm install failed — adjust VLLM_SPEC to match $torch_spec."
+  log "installing verl ('$verl_spec')"
+  python -m pip install "$verl_spec" || die "verl install failed — set VERL_PIP_SPEC to a version compatible with $torch_spec."
+
+  # guard: if a dep re-pulled a non-cu12 torch, force the cu124 build back
+  if ! python -c "import torch,sys; c=torch.version.cuda or ''; sys.exit(0 if c.split('.')[0]=='12' else 1)"; then
+    log "a dependency bumped torch off CUDA 12 — reinstalling $torch_spec (cu124)"
+    python -m pip install --force-reinstall --no-deps $torch_spec --index-url "$torch_index"
+  fi
+
+  python -c "import torch,verl; print('verl', getattr(verl,'__version__','?'), '| torch', torch.__version__, '| cuda', torch.version.cuda, '| avail', torch.cuda.is_available())" \
+    && log "verl env done -> RL_PYTHON=$VERL_VENV/bin/python (confirm 'avail True' above)" \
+    || log "WARN: import failed — check the log; may need different TORCH_SPEC/VLLM_SPEC/VERL_PIP_SPEC."
   deactivate || true
 }
 
