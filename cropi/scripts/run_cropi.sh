@@ -4,6 +4,14 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 
+# Run cropi console-scripts via `uv run` if uv exists, else directly (assumes the
+# cropi venv is already activated, e.g. `cropi_activate`). Lets the pipeline work
+# on machines with no uv (corporate net blocks astral.sh -> 403). Override with
+# CROPI_RUN=... if you want a specific interpreter/launcher.
+if [[ -z "${CROPI_RUN:-}" ]]; then
+  if command -v uv >/dev/null 2>&1; then CROPI_RUN="uv run"; else CROPI_RUN=""; fi
+fi
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -235,7 +243,7 @@ run_score_and_select() {
   local score_path
   score_path=$(score_path_for_model "${model_name}")
   log "Selecting data for ${model_name} with score file ${score_path}"
-  run_cmd "uv run cropi-select --data_root '${DATA_ROOT}' --score_method '${SCORE_METHOD}' --score_path '${score_path}' --select_ratio '${SELECT_RATIO}' --train_data_names '${TRAIN_DATA_NAMES}' --valid_data_names '${VALID_DATA_NAMES}' --model_name '${model_name}' --proj_note '${PROJ_NOTE}' --infer_note '${INFER_NOTE}' --num_parallel '${NUM_PARALLEL}' --i_iter '${iter_idx}'"
+  run_cmd "${CROPI_RUN} cropi-select --data_root '${DATA_ROOT}' --score_method '${SCORE_METHOD}' --score_path '${score_path}' --select_ratio '${SELECT_RATIO}' --train_data_names '${TRAIN_DATA_NAMES}' --valid_data_names '${VALID_DATA_NAMES}' --model_name '${model_name}' --proj_note '${PROJ_NOTE}' --infer_note '${INFER_NOTE}' --num_parallel '${NUM_PARALLEL}' --i_iter '${iter_idx}'"
 
   while IFS= read -r train_name; do
     [[ -n "${train_name}" ]] || continue
@@ -292,7 +300,7 @@ compute_grad_for_split() {
     # --offload_gradient is REQUIRED for large models: cropi-get-grad materialises
     # the full fp32 gradient vector (params*4 bytes) before sparse indexing — for a
     # 9B model that is ~36GB and OOMs an 80G GPU on top of policy+ref weights.
-    run_cmd "CUDA_VISIBLE_DEVICES=${gpu} PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run cropi-get-grad --model_name_or_path '${model_path}' --base_model '${BASE_MODEL_PATH}' --rollout_data_path '${shard}' --projection_method '${PROJECTION_METHOD}' --proj_dim '${PROJ_DIM}' --model_id '${MODEL_ID}' --seed '${SEED}' --num_generations '${num_generations}' --max_completion_length '${RL_MAX_RESPONSE_LENGTH}' --beta 0.001 --epsilon 0.2 --cancel_ppo_clip --offload_gradient --process_batch_size '${GRAD_PROCESS_BATCH_SIZE:-1}' --sparse_dim '${SPARSE_DIM}' > '${src_jsonl}.grad.rank${rank}.log' 2>&1 &"
+    run_cmd "CUDA_VISIBLE_DEVICES=${gpu} PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True ${CROPI_RUN} cropi-get-grad --model_name_or_path '${model_path}' --base_model '${BASE_MODEL_PATH}' --rollout_data_path '${shard}' --projection_method '${PROJECTION_METHOD}' --proj_dim '${PROJ_DIM}' --model_id '${MODEL_ID}' --seed '${SEED}' --num_generations '${num_generations}' --max_completion_length '${RL_MAX_RESPONSE_LENGTH}' --beta 0.001 --epsilon 0.2 --cancel_ppo_clip --offload_gradient --process_batch_size '${GRAD_PROCESS_BATCH_SIZE:-1}' --sparse_dim '${SPARSE_DIM}' > '${src_jsonl}.grad.rank${rank}.log' 2>&1 &"
     rank=$((rank + 1))
   done
   run_cmd "wait"

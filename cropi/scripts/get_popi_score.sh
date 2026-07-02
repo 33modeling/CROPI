@@ -18,6 +18,11 @@ NUM_PARALLEL=${11:-"8"}
 
 cd "${REPO_ROOT}"
 
+# Use `uv run` if uv exists, else run directly in the activated cropi venv.
+if [[ -z "${CROPI_RUN:-}" ]]; then
+  if command -v uv >/dev/null 2>&1; then CROPI_RUN="uv run"; else CROPI_RUN=""; fi
+fi
+
 echo "[INFO] Computing CROPI influence scores"
 echo "[INFO] data_root=${DATA_ROOT}"
 echo "[INFO] model_name=${MODEL_NAME}"
@@ -25,7 +30,7 @@ echo "[INFO] proj_note=${PROJ_NOTE}"
 echo "[INFO] train_data_names=${TRAIN_DATA_NAMES}"
 echo "[INFO] valid_data_names=${VALID_DATA_NAMES}"
 
-uv run cropi-compute-inf-score \
+${CROPI_RUN} cropi-compute-inf-score \
   --data_root "${DATA_ROOT}" \
   --model_name "${MODEL_NAME}" \
   --proj_note "${PROJ_NOTE}" \
