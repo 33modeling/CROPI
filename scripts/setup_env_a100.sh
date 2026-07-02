@@ -70,6 +70,28 @@ export RL_TOTAL_TRAINING_STEPS="${RL_TOTAL_TRAINING_STEPS:-60}"
 export RL_TRAIN_BATCH_SIZE="${RL_TRAIN_BATCH_SIZE:-128}"
 export RL_PPO_MINI_BATCH_SIZE="${RL_PPO_MINI_BATCH_SIZE:-128}"
 
+# ---- CUDA toolkit for building fast_jl (needs nvcc, not just torch's runtime) --
+# fast_jl compiles a CUDA extension via torch.utils.cpp_extension, which requires
+# CUDA_HOME -> a real toolkit with nvcc. Best-effort autodetect; warn if missing.
+if [[ -z "${CUDA_HOME:-}" ]]; then
+  if command -v nvcc >/dev/null 2>&1; then
+    CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+  else
+    for _c in /usr/local/cuda /usr/local/cuda-12.[0-9] /usr/local/cuda-12.[0-9][0-9]; do
+      [[ -x "${_c}/bin/nvcc" ]] && CUDA_HOME="${_c}" && break
+    done
+  fi
+fi
+if [[ -n "${CUDA_HOME:-}" && -x "${CUDA_HOME}/bin/nvcc" ]]; then
+  export CUDA_HOME
+  export PATH="${CUDA_HOME}/bin:${PATH}"
+  export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+  echo "[setup_env_a100] CUDA_HOME=${CUDA_HOME} ($("${CUDA_HOME}/bin/nvcc" --version 2>/dev/null | sed -n 's/.*release //p'))"
+else
+  echo "[setup_env_a100] WARN: no nvcc/CUDA toolkit found -> fast_jl build will fail."
+  echo "                 'module load cuda/12.x' or set CUDA_HOME before sourcing (see README/SETUP)."
+fi
+
 # Hand off to the base setup (fills venv paths, HF cache, cropi_activate, warnings).
 _A100_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck disable=SC1091
