@@ -34,6 +34,15 @@ export RESULTS_DIR="${RESULTS_DIR:-${CROPI_WORK}/results}"
 export MODELS_DIR="${MODELS_DIR:-${GROUP_VOLUME}/SR-PAI2026/nait-models}"
 export BASE_MODEL_PATH="${BASE_MODEL_PATH:-${MODELS_DIR}/Qwen3.5-9B}"
 export HFID_BASE_MODEL="${HFID_BASE_MODEL:-Qwen/Qwen3.5-9B}"   # only used if you re-download
+# Exact name varies (case / .5 / -Instruct); if the default path is absent,
+# best-effort auto-detect a Qwen3*9B dir under nait-models.
+if [[ ! -d "${BASE_MODEL_PATH}" ]]; then
+  _bm=$(find "${MODELS_DIR}" -maxdepth 1 -type d -iname '*qwen3*9b*' 2>/dev/null | sort | head -1)
+  if [[ -n "${_bm}" ]]; then
+    export BASE_MODEL_PATH="${_bm}"
+    echo "[setup_env_a100] auto-detected BASE_MODEL_PATH=${BASE_MODEL_PATH}"
+  fi
+fi
 
 # ---- Hardware-dependent knobs (MUST match visible GPU count) -----------------
 # cropi-get-grad pins shard k to gpu = k % NUM_PARALLEL, so NUM_PARALLEL must
