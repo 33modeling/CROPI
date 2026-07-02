@@ -119,9 +119,9 @@ python - <<'PY'
 import torch, fast_jl, trak
 from trak.projectors import CudaProjector, ProjectionType
 print("torch", torch.__version__, "cuda", torch.version.cuda)
-p = CudaProjector(grad_dim=1024, proj_dim=64, seed=0, proj_type=ProjectionType.normal,
-                  device="cuda", dtype=torch.float16, block_size=128, max_batch_size=8)
-x = torch.randn(4, 1024, device="cuda", dtype=torch.float16)
+p = CudaProjector(grad_dim=4096, proj_dim=512, seed=0, proj_type=ProjectionType.normal,
+                  device="cuda", dtype=torch.float16, block_size=128, max_batch_size=8)  # proj_dim must be a multiple of 512
+x = torch.randn(4, 4096, device="cuda", dtype=torch.float16)
 print("projection shape:", tuple(p.project(x, model_id=0).shape))
 print("fast_jl + trak OK")
 PY
