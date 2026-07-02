@@ -23,6 +23,19 @@ export CROPI_GPUS="${_CROPI_GPUS}"
 # ---- Cluster paths (override before sourcing if a mount differs) -------------
 export GROUP_VOLUME="${GROUP_VOLUME:-/group-volume}"
 export IT_DATASETS="${IT_DATASETS:-${GROUP_VOLUME}/SR-PAI2026/IT-datasets}"
+# Dataset root varies (with/without SR-PAI2026). If gsm8k isn't under the default,
+# probe common roots, then fall back to a bounded find.
+if [[ ! -d "${IT_DATASETS}/gsm8k" ]]; then
+  for _r in "${GROUP_VOLUME}/IT-datasets" "${GROUP_VOLUME}/SR-PAI2026/IT-datasets" \
+            "${GROUP_VOLUME}/datasets" "${GROUP_VOLUME}"; do
+    [[ -d "${_r}/gsm8k" ]] && export IT_DATASETS="${_r}" && break
+  done
+  if [[ ! -d "${IT_DATASETS}/gsm8k" ]]; then
+    _ds=$(find "${GROUP_VOLUME}" -maxdepth 3 -type d -iname gsm8k 2>/dev/null | head -1)
+    [[ -n "${_ds}" ]] && export IT_DATASETS="$(dirname "${_ds}")"
+  fi
+  [[ -d "${IT_DATASETS}/gsm8k" ]] && echo "[setup_env_a100] auto-detected IT_DATASETS=${IT_DATASETS}"
+fi
 
 # All heavy artefacts (data, rollouts, grads, checkpoints, logs) go here.
 export CROPI_WORK="${CROPI_WORK:-${GROUP_VOLUME}/minsoo3.kim/cropi}"
