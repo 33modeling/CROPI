@@ -100,6 +100,14 @@ RL_SAVE_FREQ=${RL_SAVE_FREQ:-"${RL_TOTAL_TRAINING_STEPS}"}
 RL_TEST_FREQ=${RL_TEST_FREQ:-"10"}
 RL_USE_WANDB=${RL_USE_WANDB:-"0"}
 DRY_RUN=${DRY_RUN:-"0"}
+# Optional custom reward for verl (e.g. MMLU letter-match). If set, appended to the
+# main_ppo command as custom_reward_function.{path,name}.
+CUSTOM_REWARD_PATH=${CUSTOM_REWARD_PATH:-""}
+CUSTOM_REWARD_NAME=${CUSTOM_REWARD_NAME:-"compute_score"}
+REWARD_CFG=""
+if [[ -n "${CUSTOM_REWARD_PATH}" ]]; then
+  REWARD_CFG="custom_reward_function.path='${CUSTOM_REWARD_PATH}' custom_reward_function.name='${CUSTOM_REWARD_NAME}'"
+fi
 
 cd "${REPO_ROOT}"
 
@@ -351,6 +359,7 @@ run_rl_round() {
   log "Running RL round ${iter_idx} with ${RL_NUM_GPUS} GPUs"
   run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
     data.val_files=\"${val_files_hydra}\" \
     data.train_batch_size=${RL_TRAIN_BATCH_SIZE} \
@@ -371,7 +380,7 @@ run_rl_round() {
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    +actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    ++actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${RL_TP_SIZE} \
     actor_rollout_ref.rollout.name=vllm \
@@ -456,6 +465,7 @@ run_baseline_full() {
   log "Arm A: full-data GRPO on ${train_files_hydra} (${RL_TOTAL_TRAINING_STEPS} steps)"
   run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
     data.val_files=\"${val_files_hydra}\" \
     data.train_batch_size=${RL_TRAIN_BATCH_SIZE} \
@@ -476,7 +486,7 @@ run_baseline_full() {
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    +actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    ++actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${RL_TP_SIZE} \
     actor_rollout_ref.rollout.name=vllm \

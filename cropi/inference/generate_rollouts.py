@@ -44,8 +44,17 @@ def parse_args():
     ap.add_argument("--tp_size", type=int, default=int(os.environ.get("RL_TP_SIZE", "1")))
     ap.add_argument("--gpu_mem", type=float, default=0.85)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--reward", choices=["auto", "math", "choice"], default="auto",
+                    help="reward type; auto -> infer from parquet data_source (mmlu=choice)")
     ap.add_argument("--limit", type=int, default=-1, help="debug: cap #prompts")
     return ap.parse_args()
+
+
+def pick_reward(name: str, data_source: str = ""):
+    if name == "choice" or (name == "auto" and "mmlu" in (data_source or "").lower()):
+        from cropi.rewards.choice import choice_reward
+        return choice_reward
+    return math_reward
 
 
 def math_reward(response: str, gold: str) -> float:
@@ -79,7 +88,8 @@ def load_prompts(parquet: str):
         gold = r.get("answer")
         if gold is None:
             gold = r["reward_model"]["ground_truth"]
-        rows.append({"chat": chat, "user": user, "gold": str(gold)})
+        rows.append({"chat": chat, "user": user, "gold": str(gold),
+                     "data_source": r.get("data_source", "")})
     return rows
 
 
@@ -104,6 +114,8 @@ def main():
     rows = load_prompts(args.parquet)
     if args.limit > 0:
         rows = rows[: args.limit]
+    reward_fn = pick_reward(args.reward, rows[0]["data_source"] if rows else "")
+    print(f"[rollout] reward={reward_fn.__name__} (--reward={args.reward})")
     done = already_done(args.output)
     todo = [r for r in rows if r["user"] not in done]
     print(f"[rollout] {len(rows)} prompts, {len(done)} already done, {len(todo)} to generate")
@@ -129,7 +141,7 @@ def main():
         outs = llm.generate(templated, sp)
         for r, out in zip(todo, outs):
             responses = [o.text for o in out.outputs]
-            rewards = [math_reward(resp, r["gold"]) for resp in responses]
+            rewards = [reward_fn(resp, r["gold"]) for resp in responses]
             fout.write(json.dumps({
                 "prompt": r["user"],
                 "answer": r["gold"],

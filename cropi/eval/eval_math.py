@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cropi.inference.generate_rollouts import math_reward  # reuse the reward
+from cropi.inference.generate_rollouts import math_reward, pick_reward  # reuse rewards
 
 
 def parse_args():
@@ -30,6 +30,7 @@ def parse_args():
     ap.add_argument("--tp_size", type=int, default=int(os.environ.get("RL_TP_SIZE", "1")))
     ap.add_argument("--gpu_mem", type=float, default=0.85)
     ap.add_argument("--limit", type=int, default=-1)
+    ap.add_argument("--reward", choices=["auto", "math", "choice"], default="auto")
     ap.add_argument("--overwrite", action="store_true")
     return ap.parse_args()
 
@@ -55,13 +56,15 @@ def main():
               max_model_len=args.max_prompt_tokens + args.max_tokens)
     sp = SamplingParams(n=1, temperature=0.0, max_tokens=args.max_tokens)
 
+    reward_fn = pick_reward(args.reward, str(rows[0].get("data_source", "")) if rows else "")
+    print(f"[eval] reward={reward_fn.__name__}")
     prompts, golds = [], []
     for r in rows:
         prompts.append(tok.apply_chat_template(list(r["prompt"]), tokenize=False, add_generation_prompt=True))
         golds.append(str(r.get("answer") or r["reward_model"]["ground_truth"]))
 
     outs = llm.generate(prompts, sp)
-    correct = sum(math_reward(o.outputs[0].text, g) for o, g in zip(outs, golds))
+    correct = sum(reward_fn(o.outputs[0].text, g) for o, g in zip(outs, golds))
     acc = correct / max(1, len(golds))
     summary = {"tag": args.tag, "model": args.model, "n": len(golds),
                "correct": correct, "accuracy": acc}
