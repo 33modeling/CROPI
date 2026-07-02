@@ -70,9 +70,17 @@ NV=$(python -c "import nvidia, os; print(os.path.dirname(nvidia.__file__))" 2>/d
 if [[ -n "$NV" && -d "$NV" ]]; then
   log "merging headers/libs from pip nvidia components ($NV)"
   mkdir -p "$CH/include" "$CH/lib"
-  # skip cuda_cccl (libcu++ headers shadow <cstdlib>/<cmath> and break the build)
+  # skip cuda_cccl here (its bare libcu++ <cstdlib>/<cmath> shadow the system headers)
   while IFS= read -r inc; do cp -rn "$inc/." "$CH/include/" 2>/dev/null || true; done \
     < <(find "$NV" -type d -name include -not -path '*cccl*' 2>/dev/null)
+  # ...but cudart's cuda_fp16.h needs <nv/target>, so bring in ONLY cccl's nv/ and
+  # cuda/ subtrees (namespaced — no shadowing), not the bare-name libcu++ headers.
+  _cccl=$(find "$NV" -type d -path '*cccl*' -name include 2>/dev/null | head -1)
+  if [[ -n "$_cccl" ]]; then
+    for sub in nv cuda; do
+      [[ -d "$_cccl/$sub" ]] && cp -rn "$_cccl/$sub" "$CH/include/" 2>/dev/null || true
+    done
+  fi
   while IFS= read -r so; do ln -sf "$so" "$CH/lib/" 2>/dev/null || true; done \
     < <(find "$NV" -type f -name '*.so*' 2>/dev/null)
 fi
