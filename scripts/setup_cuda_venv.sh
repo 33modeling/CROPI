@@ -75,9 +75,11 @@ if [[ -n "$NV" && -d "$NV" ]]; then
     < <(find "$NV" -type d -name include -not -path '*cccl*' 2>/dev/null)
   # ...but cudart's cuda_fp16.h needs <nv/target>, so bring in ONLY cccl's nv/ and
   # cuda/ subtrees (namespaced — no shadowing), not the bare-name libcu++ headers.
+  # namespaced subtrees only (<nv/target>, <thrust/complex.h>, <cub/...>, <cuda/std/...>)
+  # — torch's c10 headers include these; the bare libcu++ <cstdlib>/<cmath> stay out.
   _cccl=$(find "$NV" -type d -path '*cccl*' -name include 2>/dev/null | head -1)
   if [[ -n "$_cccl" ]]; then
-    for sub in nv cuda; do
+    for sub in nv cuda thrust cub; do
       [[ -d "$_cccl/$sub" ]] && cp -rn "$_cccl/$sub" "$CH/include/" 2>/dev/null || true
     done
   fi
@@ -97,8 +99,12 @@ NVCC_MAJOR=$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p' | head -1)
 [[ "$NVCC_MAJOR" == "12" ]] || die "nvcc major=$NVCC_MAJOR, need 12 (set CUDA_REDIST_VER=12.4.x)"
 
 log "building fast_jl against cropi torch"
-python -m pip install fast_jl --no-build-isolation --force-reinstall --no-cache-dir \
-  || die "fast_jl build failed — paste the compiler error (may need g++)."
+_bl="$CROPI_WORK/venvs/fast_jl_build.log"
+if ! python -m pip install fast_jl --no-build-isolation --force-reinstall --no-cache-dir > "$_bl" 2>&1; then
+  echo "----- real compiler error (from $_bl) -----" >&2
+  grep -iE 'fatal error|error:|No such file|undefined reference|FAILED:|ninja: build stopped' "$_bl" | head -25 >&2
+  die "fast_jl build failed — see $_bl for the full log."
+fi
 
 log "verify"
 python - <<'PY'
