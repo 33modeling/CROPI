@@ -34,17 +34,20 @@ source scripts/setup_env.sh            # derives venvs/models/data/cache under $
 ## 1. Install (once, needs internet)
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git build-essential tmux   # fresh image
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates build-essential python3 python3-pip python3-venv tmux
 nvidia-smi                             # confirm the driver sees your GPUs (and note how many)
+nvcc --version                         # fast_jl needs a CUDA 12.x toolkit, not just a driver
 bash scripts/install.sh all            # bootstraps uv, then builds the cropi + verl envs
 ```
 - **cropi** is installed exactly per the upstream README (torch 2.4.0 cu124, `-e .`,
   `traker`, `fast_jl`). `fast_jl` compiles a CUDA extension — it needs a **CUDA 12.x
   toolkit (`nvcc`)** on PATH. Most GPU images ship it; if the build fails, install the
-  toolkit and re-run `bash scripts/install.sh cropi`.
+  toolkit and re-run `bash scripts/install.sh cropi`. If the uv shell installer is
+  blocked on your VM, `install.sh` falls back to `python3 -m pip install --user uv`.
 - **verl** is the version-sensitive part (torch/vLLM/flash-attn are coupled). `install.sh
   verl` does a best-effort `uv pip install verl`; pin it to your CUDA with
-  `VERL_PIP_SPEC='verl==<x.y.z>'` per the
+  `VERL_PIP_SPEC='verl==<x.y.z>'` and, if needed, `VLLM_PIP_SPEC='vllm==<x.y.z>'` per the
   [verl install guide](https://verl.readthedocs.io/en/latest/start/install.html).
   If you already have a working verl env elsewhere, skip this and just
   `export RL_PYTHON=/path/to/verl-env/bin/python`.
@@ -107,24 +110,29 @@ NUM_RL_ROUNDS=2 \
 bash cropi/scripts/run_cropi.sh full "$DATA_ROOT" Qwen2.5-1.5B-Instruct_curriculum
 ```
 
-**Different GPU count?** The defaults assume 2 GPUs. On an `N`-GPU machine set both the
-RL world size and the gradient-shard fan-out to `N` before running (they must match — see
-the `NUM_PARALLEL` note below):
+**Different GPU count?** `setup_env.sh` auto-detects the visible GPU count for
+`RL_NUM_GPUS` when `nvidia-smi` is available. To set it explicitly on an `N`-GPU
+machine:
 
 ```bash
-export RL_NUM_GPUS=N NUM_PARALLEL=N     # e.g. N=4 or N=8
+N=$(nvidia-smi -L | wc -l)
+export RL_NUM_GPUS=$N NUM_PARALLEL=$N
 # larger VRAM (A100 80GB) can also raise the micro-batches back toward the paper values:
 export RL_PPO_MICRO_BATCH_SIZE_PER_GPU=16 RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU=16
 # a >1.5B base that won't fit one GPU also needs RL_TP_SIZE>1 (vLLM tensor-parallel)
 ```
 
-`setup_env.sh` already exports the 2×4090 defaults, so on a 2-GPU box you don't repeat them:
+If you are scoring **precomputed** gradient shards, keep `NUM_PARALLEL` equal to the
+existing shard count instead (often 8), even on a 2-GPU VM. For newly recomputed
+gradients on the VM, using the visible GPU count is the intended default.
+
+`setup_env.sh` already exports the 2×4090-friendly defaults, so on a 2-GPU box you don't repeat them:
 
 | knob | 2×4090 default | paper (8×A100) | why |
 |---|---|---|---|
-| `RL_NUM_GPUS` | `2` | 8 | FSDP world size for RL |
+| `RL_NUM_GPUS` | detected GPU count | 8 | FSDP world size for RL |
 | `RL_TP_SIZE` | `1` | 2 | 1.5B fits on one 4090 → no vLLM tensor-split |
-| `NUM_PARALLEL` | `2` | 8 | **must equal visible GPU count** — `cropi-get-grad` pins shard *k* to `gpu = k % NUM_PARALLEL` |
+| `NUM_PARALLEL` | `2` | 8 | gradient shard count / recompute fan-out; set to existing shard count when scoring precomputed data |
 | `RL_PPO_MICRO_BATCH_SIZE_PER_GPU` | `4` | 16 | fit 24GB; raise if VRAM allows |
 | `RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU` | `4` | 16 | same |
 | `RL_GPU_MEMORY_UTILIZATION` | `0.6` | 0.6 | vLLM rollout headroom |
@@ -159,8 +167,12 @@ so the next CROPI round reuses it directly.
 
 - **`fast_jl` won't build** → no CUDA toolkit. Install CUDA 12.x (`nvcc`) and re-run the
   cropi install. It projects gradients on-GPU; there is no pure-CPU fallback.
-- **`NUM_PARALLEL` > GPU count** → `cropi-get-grad` shards target `cuda:2..` that don't
-  exist and hang/crash. Keep `NUM_PARALLEL == RL_NUM_GPUS == 2` here.
+- **`uv` won't install through curl** → `install.sh` also tries
+  `python3 -m pip install --user uv`. If both fail, install `python3-pip` and ensure
+  `~/.local/bin` is on `PATH`.
+- **`NUM_PARALLEL` > GPU count during gradient recompute** → `cropi-get-grad` shards target
+  `cuda:2..` that don't exist and hang/crash. Keep `NUM_PARALLEL` at the visible GPU count
+  when recomputing gradients on this VM.
 - **verl / vLLM version drift** is the usual failure point (mirrors weasel's AgentLab
   caveat). The **cropi** side (scoring/selection) is version-stable; only the **verl**
   env is sensitive. Pin via `VERL_PIP_SPEC` and follow the verl install guide.

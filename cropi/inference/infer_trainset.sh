@@ -13,6 +13,7 @@ if [[ ! -f "${ENTRYPOINT}" && ! -x "${ENTRYPOINT}" ]]; then
     echo "[ERROR] ${ENTRYPOINT} was not found. Set MATH_EVAL_ENTRYPOINT to your evaluation script."
     exit 1
 fi
+PYTHON_BIN=${RL_PYTHON:-python3}
 
 OUTPUT_DIR=${MODEL_NAME_OR_PATH}/math_eval
 SPLIT=${SPLIT:-sample_200}
@@ -24,7 +25,7 @@ for DATA_NAME in ${DATA_NAMES_TRAIN//,/ }; do
         SUB_SPLIT="${SPLIT}_${i}"
         echo "[INFO] Processing ${DATA_NAME} ${SUB_SPLIT}"
         TOKENIZERS_PARALLELISM=false \
-        python3 -u "${ENTRYPOINT}" \
+        "${PYTHON_BIN}" -u "${ENTRYPOINT}" \
             --model_name_or_path "${MODEL_NAME_OR_PATH}" \
             --data_name "${DATA_NAME}" \
             --output_dir "${OUTPUT_DIR}" \

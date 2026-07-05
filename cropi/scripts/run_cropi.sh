@@ -213,6 +213,19 @@ archive_selection_if_needed() {
 }
 
 build_val_files_hydra() {
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    python - "${DATA_ROOT}" "${RL_VAL_DATA_NAMES}" <<'PY'
+import os
+import sys
+
+data_root = sys.argv[1]
+names = [x for x in sys.argv[2].split(",") if x]
+paths = [os.path.join(data_root, name, "test_qwen_split_valid.parquet") for name in names]
+print("[" + ",".join("'" + path.replace("'", "\\'") + "'" for path in paths) + "]")
+PY
+    return 0
+  fi
+
   python - "${DATA_ROOT}" "${RL_VAL_DATA_NAMES}" <<'PY'
 import os
 import sys
@@ -273,7 +286,9 @@ prepare_rollout_jsonls() {
     [[ -n "${train_name}" ]] || continue
     local src="${DATA_ROOT}/${train_name}/${src_model_name}/train_${INFER_NOTE}.jsonl"
     local dst_dir="${DATA_ROOT}/${train_name}/${dst_model_name}"
-    [[ -f "${src}" ]] || die "Missing rollout JSONL: ${src}"
+    if [[ "${DRY_RUN}" != "1" ]]; then
+      [[ -f "${src}" ]] || die "Missing rollout JSONL: ${src}"
+    fi
     run_cmd "mkdir -p '${dst_dir}'"
     run_cmd "cp '${src}' '${dst_dir}/'"
   done < <(split_csv "${TRAIN_DATA_NAMES}")
@@ -282,7 +297,9 @@ prepare_rollout_jsonls() {
     [[ -n "${valid_name}" ]] || continue
     local src="${DATA_ROOT}/${valid_name}/${src_model_name}/valid_${VALID_INFER_NOTE}.jsonl"
     local dst_dir="${DATA_ROOT}/${valid_name}/${dst_model_name}"
-    [[ -f "${src}" ]] || die "Missing rollout JSONL: ${src}"
+    if [[ "${DRY_RUN}" != "1" ]]; then
+      [[ -f "${src}" ]] || die "Missing rollout JSONL: ${src}"
+    fi
     run_cmd "mkdir -p '${dst_dir}'"
     run_cmd "cp '${src}' '${dst_dir}/'"
   done < <(split_csv "${VALID_DATA_NAMES}")
@@ -349,7 +366,9 @@ run_rl_round() {
   local model_name=$3
 
   [[ -n "${BASE_MODEL_PATH}" ]] || die "BASE_MODEL_PATH is required for RL modes"
-  command -v "${RL_PYTHON}" >/dev/null 2>&1 || die "RL_PYTHON not found: ${RL_PYTHON}"
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    command -v "${RL_PYTHON}" >/dev/null 2>&1 || die "RL_PYTHON not found: ${RL_PYTHON}"
+  fi
 
   local train_files_hydra
   train_files_hydra=$(build_train_files_hydra "${model_name}" "${iter_idx}")
