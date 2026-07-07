@@ -76,19 +76,31 @@ install_cropi() {
 
 install_verl() {
   # verl is a heavy, version-coupled framework (torch + vLLM + flash-attn + ray).
-  # We create an isolated venv and do a best-effort install; pin/adjust to match
-  # your CUDA per the verl docs: https://verl.readthedocs.io/en/latest/start/install.html
-  local spec="${VERL_PIP_SPEC:-verl}"          # e.g. VERL_PIP_SPEC='verl==0.4.1'
-  local vllm_spec="${VLLM_PIP_SPEC:-vllm}"     # e.g. VLLM_PIP_SPEC='vllm==0.8.5'
+  # Verified compatible matrix (verl vLLM>=0.8 guide + PyPI metadata, 2026-07):
+  #   torch 2.6.0 (cu124) + vllm 0.8.5 (pins torchvision 0.21.0 / torchaudio 2.6.0 /
+  #   xformers 0.0.29.post2, transformers>=4.51.1) + verl 0.4.1 + tensordict 0.6.2.
+  #   BARE `verl`/`vllm` pull the latest (verl 0.5/0.8 needs a vllm>=0.9 run_headless
+  #   async server; latest vllm needs torch 2.8+), which breaks this classic recipe.
+  #   Install order matters: torch first, then vllm, then verl, then tensordict.
+  #   Docs: https://verl.readthedocs.io/en/latest/README_vllm0.8.html
+  local spec="${VERL_PIP_SPEC:-verl==0.4.1}"           # classic ~0.4.x matches vllm 0.8.5
+  local vllm_spec="${VLLM_PIP_SPEC:-vllm==0.8.5}"      # pins torch==2.6.0 / xformers 0.0.29.post2
+  local torch_spec="${VERL_TORCH_SPEC:-torch==2.6.0}" # torch build vllm 0.8.5 pins
+  local torch_index="${VERL_TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
+  local tensordict_spec="${TENSORDICT_SPEC:-tensordict==0.6.2}"  # vllm>=0.8 ForkingPickler fix
   log "Creating verl env at $VERL_VENV (python ${VERL_PY:-3.11})"
   uv venv "$VERL_VENV" --python "${VERL_PY:-3.11}"
   # shellcheck disable=SC1091
   source "$VERL_VENV/bin/activate"
-  log "Installing verl ('$spec') + vllm ('$vllm_spec') — this is the version-sensitive step"
-  uv pip install "$spec" || die "verl install failed — follow the verl install guide and set VERL_PIP_SPEC, then re-run."
-  # vLLM is what verl uses for rollout; install if the verl meta-package didn't pull it.
-  python -c "import vllm" 2>/dev/null || uv pip install "$vllm_spec" || log "WARN: vllm not installed — install a verl-compatible vllm manually."
-  python -c "import verl; print('verl', getattr(verl,'__version__','?'))" \
+  log "Installing $torch_spec (cu124) — pin torch before the version-sensitive step"
+  uv pip install "$torch_spec" --index-url "$torch_index" || die "torch install failed — set VERL_TORCH_SPEC/VERL_TORCH_INDEX for your CUDA."
+  log "Installing $vllm_spec"
+  uv pip install "$vllm_spec" || die "vllm install failed — set VLLM_PIP_SPEC to match $torch_spec."
+  log "Installing verl ('$spec') — this is the version-sensitive step"
+  uv pip install "$spec" || die "verl install failed — set VERL_PIP_SPEC to a version compatible with $vllm_spec."
+  log "Installing $tensordict_spec (vllm>=0.8 compatibility)"
+  uv pip install "$tensordict_spec" || log "WARN: tensordict pin failed — set TENSORDICT_SPEC to match $spec."
+  python -c "import torch,verl; print('verl', getattr(verl,'__version__','?'), '| torch', torch.__version__, '| cuda', torch.version.cuda)" \
     && log "verl env OK ✓  ->  RL_PYTHON=$VERL_VENV/bin/python" \
     || log "WARN: 'import verl' failed — check the install log."
   deactivate || true

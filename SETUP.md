@@ -46,9 +46,19 @@ bash scripts/install.sh all            # bootstraps uv, then builds the cropi + 
   toolkit and re-run `bash scripts/install.sh cropi`. If the uv shell installer is
   blocked on your VM, `install.sh` falls back to `python3 -m pip install --user uv`.
 - **verl** is the version-sensitive part (torch/vLLM/flash-attn are coupled). `install.sh
-  verl` does a best-effort `uv pip install verl`; pin it to your CUDA with
-  `VERL_PIP_SPEC='verl==<x.y.z>'` and, if needed, `VLLM_PIP_SPEC='vllm==<x.y.z>'` per the
-  [verl install guide](https://verl.readthedocs.io/en/latest/start/install.html).
+  verl` now pins a **verified-compatible matrix** by default (installed in this order):
+  `torch==2.6.0` (cu124) → `vllm==0.8.5` → `verl==0.4.1` → `tensordict==0.6.2`.
+  - vllm 0.8.5 exactly pins torch 2.6.0 / torchvision 0.21.0 / torchaudio 2.6.0 /
+    xformers 0.0.29.post2 and needs transformers>=4.51.1.
+  - **Do not use bare `verl`/`vllm` (latest).** verl 0.5/0.8's `main_ppo` needs a
+    vllm>=0.9 async server (`run_headless`), which does not exist in vllm 0.8.5; and
+    the latest vllm needs torch 2.8+. Classic `verl==0.4.1` + `vllm==0.8.5` is the
+    combo `cropi/scripts/run_cropi.sh` (RL_MAIN=`verl.trainer.main_ppo`) expects.
+  - `tensordict==0.6.2` is required with vllm>=0.8, otherwise importing vllm raises
+    `cannot import ForkingPickler from torch.multiprocessing.reductions`
+    (see the [verl vLLM>=0.8 guide](https://verl.readthedocs.io/en/latest/README_vllm0.8.html)).
+  - Override per your CUDA with `VERL_PIP_SPEC`, `VLLM_PIP_SPEC`, `VERL_TORCH_SPEC`,
+    `TENSORDICT_SPEC` (or `TORCH_SPEC`/`VLLM_SPEC` for `install_venv.sh`).
   If you already have a working verl env elsewhere, skip this and just
   `export RL_PYTHON=/path/to/verl-env/bin/python`.
 

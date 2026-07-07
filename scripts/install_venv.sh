@@ -56,10 +56,16 @@ install_verl() {
   # -> only cu12x torch works; a default `pip install verl` drags in a cu13 torch
   # that fails with "driver too old"). So install a cu124 torch FIRST, then vllm,
   # then verl, and finally guard that nothing bumped torch off CUDA 12.
-  local verl_spec="${VERL_PIP_SPEC:-verl}"          # e.g. VERL_PIP_SPEC='verl==0.5.0'
-  local torch_spec="${TORCH_SPEC:-torch==2.6.0}"    # newest torch that ships cu124 wheels
+  # Verified compatible matrix (verl vLLM>=0.8 guide + PyPI metadata, 2026-07):
+  #   torch 2.6.0 (cu124) + vllm 0.8.5 (pins torchvision 0.21.0 / torchaudio 2.6.0 /
+  #   xformers 0.0.29.post2, transformers>=4.51.1) + verl 0.4.1 (classic main_ppo).
+  #   BARE `verl` pulls the latest (0.5/0.8) whose main_ppo needs a vllm>=0.9 async
+  #   server (run_headless) — that breaks against vllm 0.8.5, so pin verl==0.4.1.
+  local verl_spec="${VERL_PIP_SPEC:-verl==0.4.1}"   # classic ~0.4.x matches vllm 0.8.5
+  local torch_spec="${TORCH_SPEC:-torch==2.6.0}"    # torch build vllm 0.8.5 pins
   local torch_index="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
-  local vllm_spec="${VLLM_SPEC:-vllm==0.8.5}"        # vllm build matched to torch 2.6/cu124
+  local vllm_spec="${VLLM_SPEC:-vllm==0.8.5}"        # pins torch==2.6.0 / xformers 0.0.29.post2
+  local tensordict_spec="${TENSORDICT_SPEC:-tensordict==0.6.2}"  # vllm>=0.8 ForkingPickler fix
   log "Creating verl venv at $VERL_VENV"
   "$PYTHON_BIN" -m venv "$VERL_VENV"
   # shellcheck disable=SC1091
@@ -72,6 +78,11 @@ install_verl() {
   python -m pip install "$vllm_spec" || die "vllm install failed — adjust VLLM_SPEC to match $torch_spec."
   log "installing verl ('$verl_spec')"
   python -m pip install "$verl_spec" || die "verl install failed — set VERL_PIP_SPEC to a version compatible with $torch_spec."
+  # verl>=0.8 path only: main_ppo needs vllm>=0.9 (run_headless). With vllm 0.8.5
+  # keep classic verl 0.4.x and pin tensordict==0.6.2, else importing vllm raises
+  # "cannot import ForkingPickler from torch.multiprocessing.reductions".
+  log "installing $tensordict_spec (vllm>=0.8 compatibility)"
+  python -m pip install "$tensordict_spec" || die "tensordict install failed — set TENSORDICT_SPEC to match $verl_spec."
 
   # guard: if a dep re-pulled a non-cu12 torch, force the cu124 build back
   if ! python -c "import torch,sys; c=torch.version.cuda or ''; sys.exit(0 if c.split('.')[0]=='12' else 1)"; then
