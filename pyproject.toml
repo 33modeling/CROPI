@@ -31,3 +31,7 @@ cropi-split-jsonl = "cropi.utils.split_files:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cropi"]
+
+[tool.uv.extra-build-dependencies]
+fast-jl = ["setuptools", "wheel"]
+fast-gae = ["setuptools", "wheel"]

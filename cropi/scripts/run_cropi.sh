@@ -88,6 +88,10 @@ RL_PROJECT_NAME=${RL_PROJECT_NAME:-"cropi_rl"}
 RL_NUM_GPUS=${RL_NUM_GPUS:-"8"}
 RL_TP_SIZE=${RL_TP_SIZE:-"2"}
 RL_GPU_MEMORY_UTILIZATION=${RL_GPU_MEMORY_UTILIZATION:-"0.6"}
+# CPU-offload the actor params/optimizer to fit large models on small VRAM (e.g. 7B
+# colocated GRPO on 24GB). Defaults False (A100 80G has room); set True on tight VRAM.
+RL_PARAM_OFFLOAD=${RL_PARAM_OFFLOAD:-"False"}
+RL_OPTIMIZER_OFFLOAD=${RL_OPTIMIZER_OFFLOAD:-"False"}
 RL_N_SAMPLES=${RL_N_SAMPLES:-"${N_SAMPLES}"}
 RL_TRAIN_BATCH_SIZE=${RL_TRAIN_BATCH_SIZE:-"128"}
 RL_PPO_MINI_BATCH_SIZE=${RL_PPO_MINI_BATCH_SIZE:-"128"}
@@ -104,6 +108,11 @@ DRY_RUN=${DRY_RUN:-"0"}
 # classic verl (~0.4.x) with vllm 0.8.5. NOTE: verl 0.8.0's main_ppo needs a
 # vllm>=0.9 async server (run_headless) and main_ppo_sync needs TransferQueue
 # (which pins numpy<2 and breaks the vllm stack) — so pin classic verl instead.
+# vllm's CuMemAllocator (colocated rollout / sleep-mode weight offload) asserts that
+# PYTORCH_CUDA_ALLOC_CONF does NOT contain expandable_segments:True. setup_env*.sh
+# exports that for the scoring stage, so strip it for the verl launch (empty = default
+# allocator). Override only if you know your vllm build tolerates a custom conf.
+RL_PYTORCH_CUDA_ALLOC_CONF=${RL_PYTORCH_CUDA_ALLOC_CONF:-""}
 RL_MAIN=${RL_MAIN:-"verl.trainer.main_ppo"}
 # Optional custom reward for verl (e.g. MMLU letter-match). If set, appended to the
 # main_ppo command as custom_reward_function.{path,name}.
@@ -112,6 +121,22 @@ CUSTOM_REWARD_NAME=${CUSTOM_REWARD_NAME:-"compute_score"}
 REWARD_CFG=""
 if [[ -n "${CUSTOM_REWARD_PATH}" ]]; then
   REWARD_CFG="custom_reward_function.path='${CUSTOM_REWARD_PATH}' custom_reward_function.name='${CUSTOM_REWARD_NAME}'"
+fi
+
+# Optional FSDP transformer-layer wrap class. verl derives the FSDP auto-wrap set
+# from the model's `_no_split_modules` and REQUIRES every listed class to exist in
+# the loaded module. Multimodal checkpoints (e.g. Qwen3.5-9B) list a vision block
+# there (`Qwen3_5VisionBlock`) that is absent when the text tower is loaded via
+# AutoModelForCausalLM, so verl raises "Could not find the transformer layer class
+# to wrap in the model." Set RL_FSDP_TRANSFORMER_LAYER_CLS to the real decoder-layer
+# class name (e.g. Qwen3_5DecoderLayer) to override the wrap policy explicitly.
+# Leave empty for plain text models (Qwen2/Qwen2.5) whose _no_split_modules is valid.
+RL_FSDP_TRANSFORMER_LAYER_CLS=${RL_FSDP_TRANSFORMER_LAYER_CLS:-""}
+FSDP_WRAP_CFG=""
+if [[ -n "${RL_FSDP_TRANSFORMER_LAYER_CLS}" ]]; then
+  # `+` appends the key: verl's wrap_policy struct only predeclares min_num_params,
+  # so overriding without `+` fails with "Key ... is not in struct".
+  FSDP_WRAP_CFG="+actor_rollout_ref.actor.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${RL_FSDP_TRANSFORMER_LAYER_CLS}] +actor_rollout_ref.ref.fsdp_config.wrap_policy.transformer_layer_cls_to_wrap=[${RL_FSDP_TRANSFORMER_LAYER_CLS}]"
 fi
 
 cd "${REPO_ROOT}"
@@ -142,7 +167,7 @@ split_csv() {
 }
 
 join_as_hydra_list() {
-  python - "$@" <<'PY'
+  "${RL_PYTHON}" - "$@" <<'PY'
 import sys
 items = [x for x in sys.argv[1:] if x]
 print("[" + ",".join("'" + item.replace("'", "\\'") + "'" for item in items) + "]")
@@ -226,7 +251,7 @@ PY
     return 0
   fi
 
-  python - "${DATA_ROOT}" "${RL_VAL_DATA_NAMES}" <<'PY'
+  "${RL_PYTHON}" - "${DATA_ROOT}" "${RL_VAL_DATA_NAMES}" <<'PY'
 import os
 import sys
 
@@ -318,7 +343,7 @@ compute_grad_for_split() {
     [[ -f "${src_jsonl}" ]] || die "Missing rollout file for gradient computation: ${src_jsonl}"
   fi
 
-  run_cmd "python '${REPO_ROOT}/cropi/utils/split_files.py' --input '${src_jsonl}' --split_num '${NUM_PARALLEL}'"
+  run_cmd "'${RL_PYTHON}' '${REPO_ROOT}/cropi/utils/split_files.py' --input '${src_jsonl}' --split_num '${NUM_PARALLEL}'"
 
   local rank=0
   while [[ ${rank} -lt ${NUM_PARALLEL} ]]; do
@@ -357,7 +382,7 @@ export_actor_to_hf() {
   if [[ "${DRY_RUN}" != "1" ]]; then
     [[ -d "${actor_dir}" ]] || die "Actor directory does not exist: ${actor_dir}"
   fi
-  run_cmd "python '${REPO_ROOT}/cropi/utils/model_merger.py' --local_dir '${actor_dir}'"
+  run_cmd "'${RL_PYTHON}' '${REPO_ROOT}/cropi/utils/model_merger.py' --local_dir '${actor_dir}'"
 }
 
 run_rl_round() {
@@ -381,7 +406,7 @@ run_rl_round() {
   fi
 
   log "Running RL round ${iter_idx} with ${RL_NUM_GPUS} GPUs"
-  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m ${RL_MAIN} \
+  run_cmd "cd '${RL_WORKDIR}' && PYTORCH_CUDA_ALLOC_CONF='${RL_PYTORCH_CUDA_ALLOC_CONF}' '${RL_PYTHON}' -m ${RL_MAIN} \
     algorithm.adv_estimator=grpo \
     ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
@@ -402,9 +427,10 @@ run_rl_round() {
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0.001 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=False \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=${RL_PARAM_OFFLOAD} \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${RL_OPTIMIZER_OFFLOAD} \
     ++actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    ${FSDP_WRAP_CFG} \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${RL_TP_SIZE} \
     actor_rollout_ref.rollout.name=vllm \
@@ -487,7 +513,7 @@ run_baseline_full() {
   [[ "${RL_USE_WANDB}" == "1" ]] && logger_cfg="['console','wandb']"
 
   log "Arm A: full-data GRPO on ${train_files_hydra} (${RL_TOTAL_TRAINING_STEPS} steps)"
-  run_cmd "cd '${RL_WORKDIR}' && '${RL_PYTHON}' -m ${RL_MAIN} \
+  run_cmd "cd '${RL_WORKDIR}' && PYTORCH_CUDA_ALLOC_CONF='${RL_PYTORCH_CUDA_ALLOC_CONF}' '${RL_PYTHON}' -m ${RL_MAIN} \
     algorithm.adv_estimator=grpo \
     ${REWARD_CFG} \
     data.train_files=\"${train_files_hydra}\" \
@@ -508,9 +534,10 @@ run_baseline_full() {
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0.001 \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=False \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=${RL_PARAM_OFFLOAD} \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=${RL_OPTIMIZER_OFFLOAD} \
     ++actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+    ${FSDP_WRAP_CFG} \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${RL_TP_SIZE} \
     actor_rollout_ref.rollout.name=vllm \

@@ -7,6 +7,9 @@
 # Run `source scripts/setup_env.sh` FIRST so paths/CROPI_VENV/VERL_VENV are set.
 # This never touches the system Python — everything lives under $CROPI_WORK/venvs.
 set -euo pipefail
+export UV_SYSTEM_CERTS=1
+export PATH=/usr/local/cuda-12.4/bin:$PATH
+export CUDA_HOME=/usr/local/cuda-12.4
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
@@ -57,6 +60,7 @@ install_cropi() {
   source "$CROPI_VENV/bin/activate"
 
   # Exact recipe from the upstream README (§ How To Run / 1).
+uv pip install --system-certs setuptools wheel
   log "Installing torch 2.4.0 (cu124) + cropi + selection deps"
   uv pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
   uv pip install -e "$REPO_ROOT"

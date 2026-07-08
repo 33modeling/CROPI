@@ -66,6 +66,13 @@ install_verl() {
   local torch_index="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
   local vllm_spec="${VLLM_SPEC:-vllm==0.8.5}"        # pins torch==2.6.0 / xformers 0.0.29.post2
   local tensordict_spec="${TENSORDICT_SPEC:-tensordict==0.6.2}"  # vllm>=0.8 ForkingPickler fix
+  # vllm 0.8.5 declares `transformers>=4.51.1` with NO upper bound, and verl 0.4.1
+  # declares a bare `transformers`, so pip resolves the LATEST (5.x). But transformers
+  # 5.x removed `all_special_tokens_extended`, which vllm 0.8.5's get_cached_tokenizer
+  # still reads -> "Qwen2Tokenizer has no attribute all_special_tokens_extended" at
+  # rollout init. Pin <5 so the vllm 0.8.5 stack stays intact. (For Qwen3.5/qwen3_5,
+  # which NEEDS transformers>=5, vllm 0.8.5 is too old anyway — bump the whole stack.)
+  local transformers_spec="${TRANSFORMERS_SPEC:-transformers==4.51.3}"
   log "Creating verl venv at $VERL_VENV"
   "$PYTHON_BIN" -m venv "$VERL_VENV"
   # shellcheck disable=SC1091
@@ -83,6 +90,10 @@ install_verl() {
   # "cannot import ForkingPickler from torch.multiprocessing.reductions".
   log "installing $tensordict_spec (vllm>=0.8 compatibility)"
   python -m pip install "$tensordict_spec" || die "tensordict install failed — set TENSORDICT_SPEC to match $verl_spec."
+  # Pin transformers <5 last: verl/vllm dep resolution otherwise leaves the latest 5.x
+  # in place, which breaks vllm 0.8.5's tokenizer init (see note above).
+  log "pinning $transformers_spec (vllm 0.8.5 tokenizer compatibility)"
+  python -m pip install "$transformers_spec" || die "transformers pin failed — set TRANSFORMERS_SPEC to a <5 build compatible with $vllm_spec."
 
   # guard: if a dep re-pulled a non-cu12 torch, force the cu124 build back
   if ! python -c "import torch,sys; c=torch.version.cuda or ''; sys.exit(0 if c.split('.')[0]=='12' else 1)"; then
