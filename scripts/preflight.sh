@@ -12,6 +12,11 @@ set -uo pipefail
 : "${BASE_MODEL_PATH:?source scripts/setup_env_a100.sh first}"
 : "${CROPI_WORK:?source scripts/setup_env_a100.sh first}"
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${HERE}/vm_compat.sh"
+cropi_apply_vm_compat
+
 ok(){   echo "  [ OK ] $*"; }
 warn(){ echo "  [WARN] $*"; }
 bad(){  echo "  [FAIL] $*"; }
@@ -37,6 +42,14 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 else
   bad "nvidia-smi not found"
 fi
+
+echo "-- compatibility profile ---------------------------------"
+echo "       profile/matrix : ${CROPI_VM_PROFILE} / ${CROPI_COMPAT_MATRIX}"
+echo "       driver CUDA    : $(cropi_detect_driver_cuda || true)"
+echo "       cuda redist    : ${CUDA_REDIST_VER}"
+echo "       torch arch     : ${TORCH_CUDA_ARCH_LIST} (${CROPI_GPU_ARCH_NOTE})"
+echo "       cropi torch    : ${CROPI_TORCH_SPEC} @ ${CROPI_TORCH_INDEX}"
+echo "       verl stack     : ${VERL_TORCH_SPEC} @ ${VERL_TORCH_INDEX} -> ${VLLM_PIP_SPEC} -> ${VERL_PIP_SPEC} -> ${TENSORDICT_SPEC}"
 
 echo "-- raw dataset format -------------------------------------"
 for d in gsm8k mmlu; do
@@ -80,12 +93,18 @@ if [ -n "${CROPI_VENV:-}" ] && [ -f "$CROPI_VENV/bin/python" ]; then
   "$CROPI_VENV/bin/python" - "$BASE_MODEL_PATH" <<'PY'
 import sys
 try:
-    import transformers
+    import torch, transformers
     from transformers import AutoConfig
     c = AutoConfig.from_pretrained(sys.argv[1], trust_remote_code=True)
+    print(f"  [ OK ] torch {torch.__version__} cuda={torch.version.cuda} avail={torch.cuda.is_available()}")
     print(f"  [ OK ] transformers {transformers.__version__} parsed config ({type(c).__name__})")
+    try:
+        import traker, fast_jl
+        print(f"  [ OK ] traker {getattr(traker,'__version__','?')} fast_jl import OK")
+    except Exception as e:
+        print(f"  [WARN] traker/fast_jl import issue: {e}")
 except Exception as e:
-    print(f"  [FAIL] cropi env cannot parse Qwen3.5 config: {e}")
+    print(f"  [FAIL] cropi env cannot parse model config: {e}")
     print("         -> may need a newer transformers in the cropi venv for get-grad.")
 PY
 else
@@ -102,6 +121,11 @@ for m in ("verl","vllm","transformers","torch"):
     except Exception as e:
         mods.append(f"{m}=MISSING({e.__class__.__name__})")
 print("       " + "  ".join(mods))
+try:
+    import torch
+    print(f"       torch.cuda={torch.version.cuda} available={torch.cuda.is_available()}")
+except Exception:
+    pass
 print("       -> confirm this vllm/transformers supports the Qwen3.5 architecture.")
 PY
 else

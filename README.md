@@ -23,6 +23,7 @@ Paper: **[Data-Efficient RLVR via Off-Policy Influence Guidance](https://arxiv.o
 ## Cloud VM quickstart (fork) 🖥️
 
 Full guide + data layout + per-knob notes in **[SETUP.md](SETUP.md)**.
+For A100/H100 library pinning and repair commands, see **[VM_COMPAT.md](VM_COMPAT.md)**.
 
 ```bash
 git clone git@github.com:33modeling/CROPI.git && cd CROPI
@@ -39,7 +40,9 @@ BASE_MODEL_PATH="$BASE_MODEL_PATH" RL_PYTHON="$RL_PYTHON" \
 | fork script | purpose |
 |---|---|
 | `scripts/setup_env.sh` | source once: `$CROPI_WORK` workspace, uv-env location (`UV_PROJECT_ENVIRONMENT`), `RL_PYTHON`→verl venv, HF-cache redirect, VM knob defaults, `cropi_activate`, warn-only path checks |
+| `scripts/setup_env_a100.sh` / `scripts/setup_env_h100.sh` | source a hardware profile: GPU count, `TORCH_CUDA_ARCH_LIST`, CUDA redist choice, model/data paths, and the shared verl/vLLM pin matrix |
 | `scripts/install.sh {cropi\|verl\|all}` | bootstrap `uv`; build the two venvs on the workspace disk (cropi = upstream recipe; verl = version-sensitive, `VERL_PIP_SPEC` overridable) |
+| `scripts/repair_vm_libs.sh [a100\|h100] {cropi\|verl\|all}` | re-pin an existing VM env after dependency drift without recreating the whole workspace |
 
 > The upstream `cropi/scripts/run_cropi.sh` (`select-only`/`rl-only`/`full`) is unchanged —
 > the fork scripts just export the paths and 2-GPU defaults it reads.
@@ -88,7 +91,9 @@ bash scripts/run_gsm8k.sh                    # DRY_RUN=1 to preview the command 
 | `fast_jl` `CUDA_HOME not set` | no `/usr/local/cuda` in container | `setup_cuda_venv.sh` builds a pip CUDA-12 toolkit |
 | `BASE_MODEL_PATH missing` | model is at `/group-volume/nait-models`, not `…/SR-PAI2026/…` | `setup_env_a100.sh` auto-detects; or `export BASE_MODEL_PATH=…` |
 | value doesn't change after `git pull` | stale exported vars win over `${VAR:-default}` | `unset BASE_MODEL_PATH MODELS_DIR` (or open a fresh shell) then re-source |
-| verl `NVIDIA driver too old (12020)` | node driver (CUDA 12.2) older than verl's torch build | use a newer-driver node, or pin verl's torch to a cu121 build |
+| verl `NVIDIA driver too old (12020)` | resolver pulled a CUDA build the node driver cannot run | `bash scripts/repair_vm_libs.sh a100 verl`; if cu124 still fails, move to a newer-driver node |
+| H100 `fast_jl` build/runtime mismatch | extension built for A100 `sm_80` | `source scripts/setup_env_h100.sh N` then rerun `bash scripts/setup_cuda_venv.sh` (`TORCH_CUDA_ARCH_LIST=9.0`) |
+| latest `verl`/`vllm` drift | resolver upgraded away from the classic matrix | `bash scripts/repair_vm_libs.sh a100 verl` or `bash scripts/repair_vm_libs.sh h100 verl` |
 
 > `NUM_PARALLEL` **must equal** the visible GPU count (`setup_env_a100.sh N` sets it) —
 > `cropi-get-grad` pins shard *k* to `gpu = k % NUM_PARALLEL`.

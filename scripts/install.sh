@@ -14,6 +14,9 @@ REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 # Make sure the env is loaded (idempotent if already sourced).
 # shellcheck disable=SC1091
 source "${HERE}/setup_env.sh"
+# shellcheck disable=SC1091
+source "${HERE}/vm_compat.sh"
+cropi_apply_vm_compat
 
 WHICH="${1:-all}"
 
@@ -56,17 +59,23 @@ install_cropi() {
   # shellcheck disable=SC1091
   source "$CROPI_VENV/bin/activate"
 
-  # Exact recipe from the upstream README (§ How To Run / 1).
-  log "Installing torch 2.4.0 (cu124) + cropi + selection deps"
-  uv pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+  log "Installing ${CROPI_TORCH_SPEC} + cropi + selection deps"
+  uv pip install "${CROPI_TORCH_SPEC}" --index-url "${CROPI_TORCH_INDEX}"
   uv pip install -e "$REPO_ROOT"
   uv pip install numpy pandas pyarrow tqdm "transformers<5" math-verify tabulate "huggingface_hub[cli]"
-  uv pip install --no-deps traker==0.3.2
+  uv pip install --no-deps "${TRAKER_SPEC}"
   # fast_jl builds a CUDA extension against the env's torch — needs a matching
   # CUDA toolkit (nvcc) on PATH. Most GPU cloud images ship it; if this step
-  # fails, install the CUDA 12.x toolkit (or `module load cuda`) and re-run.
-  uv pip install fast_jl --no-build-isolation \
-    || die "fast_jl build failed — likely no nvcc/CUDA toolkit. Install CUDA 12.x toolkit and re-run 'bash scripts/install.sh cropi'."
+  # is absent, finish the venv and let setup_cuda_venv.sh assemble one.
+  if [[ "${SKIP_FAST_JL:-0}" == "1" ]]; then
+    log "SKIP_FAST_JL=1 -> leaving fast_jl for scripts/setup_cuda_venv.sh"
+  elif command -v nvcc >/dev/null 2>&1 || [[ -x "${CUDA_HOME:-}/bin/nvcc" ]]; then
+    uv pip install fast_jl --no-build-isolation --no-deps \
+      || die "fast_jl build failed — run 'bash scripts/setup_cuda_venv.sh' or adjust CUDA_HOME."
+  else
+    log "WARN: no nvcc/CUDA toolkit found; cropi env built without fast_jl."
+    log "      Run 'bash scripts/setup_cuda_venv.sh' next to assemble CUDA and build fast_jl."
+  fi
 
   log "cropi env sanity check"
   uv run --python "$CROPI_VENV/bin/python" python -m compileall -q "$REPO_ROOT/cropi" \
@@ -83,11 +92,11 @@ install_verl() {
   #   async server; latest vllm needs torch 2.8+), which breaks this classic recipe.
   #   Install order matters: torch first, then vllm, then verl, then tensordict.
   #   Docs: https://verl.readthedocs.io/en/latest/README_vllm0.8.html
-  local spec="${VERL_PIP_SPEC:-verl==0.4.1}"           # classic ~0.4.x matches vllm 0.8.5
-  local vllm_spec="${VLLM_PIP_SPEC:-vllm==0.8.5}"      # pins torch==2.6.0 / xformers 0.0.29.post2
-  local torch_spec="${VERL_TORCH_SPEC:-torch==2.6.0}" # torch build vllm 0.8.5 pins
-  local torch_index="${VERL_TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
-  local tensordict_spec="${TENSORDICT_SPEC:-tensordict==0.6.2}"  # vllm>=0.8 ForkingPickler fix
+  local spec="${VERL_PIP_SPEC}"           # classic ~0.4.x matches vllm 0.8.5
+  local vllm_spec="${VLLM_PIP_SPEC}"      # pins torch==2.6.0 / xformers 0.0.29.post2
+  local torch_spec="${VERL_TORCH_SPEC}"   # torch build vllm 0.8.5 pins
+  local torch_index="${VERL_TORCH_INDEX}"
+  local tensordict_spec="${TENSORDICT_SPEC}"  # vllm>=0.8 ForkingPickler fix
   log "Creating verl env at $VERL_VENV (python ${VERL_PY:-3.11})"
   uv venv "$VERL_VENV" --python "${VERL_PY:-3.11}"
   # shellcheck disable=SC1091

@@ -12,6 +12,19 @@
 # This sets the A100/9B-specific knobs, then hands off to the repo's setup_env.sh
 # (which only fills in ${VAR:-default}, so everything exported here wins).
 
+_A100_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_CROPI_PREV_PROFILE="${CROPI_VM_PROFILE:-}"
+export CROPI_VM_PROFILE="a100"
+if [[ -n "${_CROPI_PREV_PROFILE}" && "${_CROPI_PREV_PROFILE}" != "${CROPI_VM_PROFILE}" ]]; then
+  unset TORCH_CUDA_ARCH_LIST CROPI_GPU_ARCH_NOTE CUDA_REDIST_VER
+  unset CROPI_WORK DATA_ROOT CKPT_ROOT RESULTS_DIR
+  unset NUM_PARALLEL RL_NUM_GPUS RL_TP_SIZE RL_GPU_MEMORY_UTILIZATION
+  unset RL_PPO_MICRO_BATCH_SIZE_PER_GPU RL_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU
+fi
+# shellcheck disable=SC1091
+source "${_A100_DIR}/vm_compat.sh"
+cropi_apply_vm_compat
+
 # ---- GPU count (positional arg or $CROPI_GPUS; default 4) --------------------
 _CROPI_GPUS="${1:-${CROPI_GPUS:-4}}"
 case "${_CROPI_GPUS}" in
@@ -125,7 +138,6 @@ else
 fi
 
 # Hand off to the base setup (fills venv paths, HF cache, cropi_activate, warnings).
-_A100_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck disable=SC1091
 source "${_A100_DIR}/setup_env.sh"
 
@@ -137,4 +149,8 @@ echo "  IT_DATASETS=${IT_DATASETS}"
 echo "  DATA_ROOT=${DATA_ROOT}"
 echo "  CKPT_ROOT=${CKPT_ROOT}"
 echo "  RESULTS_DIR=${RESULTS_DIR}"
+echo "  VM_PROFILE=${CROPI_VM_PROFILE}  MATRIX=${CROPI_COMPAT_MATRIX}"
+echo "  CUDA_REDIST_VER=${CUDA_REDIST_VER}  TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 echo "  NUM_RL_ROUNDS=${NUM_RL_ROUNDS}  SELECT_RATIO=${SELECT_RATIO}  TOTAL_STEPS=${RL_TOTAL_TRAINING_STEPS}"
+
+unset _CROPI_PREV_PROFILE

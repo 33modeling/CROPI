@@ -15,6 +15,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/.." && pwd)"
 # shellcheck disable=SC1091
 source "${HERE}/setup_env.sh" >/dev/null
+# shellcheck disable=SC1091
+source "${HERE}/vm_compat.sh"
+cropi_apply_vm_compat
 
 WHICH="${1:-all}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -32,20 +35,27 @@ install_cropi() {
   source "$CROPI_VENV/bin/activate"
   python -m pip install --upgrade pip
 
-  # torch first, from the CUDA 12.4 wheel index. If download.pytorch.org is
+  # torch first, from the selected CUDA wheel index. If download.pytorch.org is
   # blocked (403), install torch from your internal mirror instead, then re-run
   # this script (the torch line will be a no-op).
-  log "installing torch 2.4.0 (cu124)"
-  python -m pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu124 \
-    || die "torch install failed (proxy/403?). Install torch==2.4.0 from your internal mirror, then re-run."
+  log "installing ${CROPI_TORCH_SPEC} from ${CROPI_TORCH_INDEX}"
+  python -m pip install "${CROPI_TORCH_SPEC}" --index-url "${CROPI_TORCH_INDEX}" \
+    || die "torch install failed (proxy/403?). Install ${CROPI_TORCH_SPEC} from your internal mirror, then re-run."
 
   log "installing cropi + selection deps"
   python -m pip install -e "$REPO_ROOT"
   python -m pip install numpy pandas pyarrow tqdm "transformers<5" math-verify tabulate
-  python -m pip install --no-deps traker==0.3.2
+  python -m pip install --no-deps "${TRAKER_SPEC}"
   # fast_jl compiles a CUDA extension against this env's torch -> needs nvcc (CUDA 12.x).
-  python -m pip install fast_jl --no-build-isolation \
-    || die "fast_jl build failed — likely no nvcc/CUDA toolkit on PATH. Load CUDA 12.x and re-run 'bash scripts/install_venv.sh cropi'."
+  if [[ "${SKIP_FAST_JL:-0}" == "1" ]]; then
+    log "SKIP_FAST_JL=1 -> leaving fast_jl for scripts/setup_cuda_venv.sh"
+  elif command -v nvcc >/dev/null 2>&1 || [[ -x "${CUDA_HOME:-}/bin/nvcc" ]]; then
+    python -m pip install fast_jl --no-build-isolation --no-deps \
+      || die "fast_jl build failed — run 'bash scripts/setup_cuda_venv.sh' or adjust CUDA_HOME."
+  else
+    log "WARN: no nvcc/CUDA toolkit found; cropi env built without fast_jl."
+    log "      Run 'bash scripts/setup_cuda_venv.sh' next to assemble CUDA and build fast_jl."
+  fi
 
   python -m compileall -q "$REPO_ROOT/cropi" && log "cropi env OK ✓ ($CROPI_VENV)"
   deactivate || true
@@ -61,11 +71,11 @@ install_verl() {
   #   xformers 0.0.29.post2, transformers>=4.51.1) + verl 0.4.1 (classic main_ppo).
   #   BARE `verl` pulls the latest (0.5/0.8) whose main_ppo needs a vllm>=0.9 async
   #   server (run_headless) — that breaks against vllm 0.8.5, so pin verl==0.4.1.
-  local verl_spec="${VERL_PIP_SPEC:-verl==0.4.1}"   # classic ~0.4.x matches vllm 0.8.5
-  local torch_spec="${TORCH_SPEC:-torch==2.6.0}"    # torch build vllm 0.8.5 pins
-  local torch_index="${TORCH_INDEX:-https://download.pytorch.org/whl/cu124}"
-  local vllm_spec="${VLLM_SPEC:-vllm==0.8.5}"        # pins torch==2.6.0 / xformers 0.0.29.post2
-  local tensordict_spec="${TENSORDICT_SPEC:-tensordict==0.6.2}"  # vllm>=0.8 ForkingPickler fix
+  local verl_spec="${VERL_PIP_SPEC}"   # classic ~0.4.x matches vllm 0.8.5
+  local torch_spec="${TORCH_SPEC}"     # torch build vllm 0.8.5 pins
+  local torch_index="${TORCH_INDEX}"
+  local vllm_spec="${VLLM_SPEC}"       # pins torch==2.6.0 / xformers 0.0.29.post2
+  local tensordict_spec="${TENSORDICT_SPEC}"  # vllm>=0.8 ForkingPickler fix
   log "Creating verl venv at $VERL_VENV"
   "$PYTHON_BIN" -m venv "$VERL_VENV"
   # shellcheck disable=SC1091

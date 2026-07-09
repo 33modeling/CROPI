@@ -15,6 +15,11 @@ set -euo pipefail
 : "${CROPI_VENV:?source scripts/setup_env_a100.sh first}"
 : "${CROPI_WORK:?source scripts/setup_env_a100.sh first}"
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${HERE}/vm_compat.sh"
+cropi_apply_vm_compat
+
 log(){ echo -e "\n\033[1;36m[cuda] $*\033[0m"; }
 die(){ echo "[cuda][ERROR] $*" >&2; exit 1; }
 
@@ -25,8 +30,10 @@ source "$CROPI_VENV/bin/activate"
 TORCH_CUDA=$(python -c "import torch;print(torch.version.cuda or '')" 2>/dev/null || true)
 log "cropi venv torch CUDA = ${TORCH_CUDA:-unknown} (matching a cu12.x nvcc)"
 
-# Match (or stay below) the NODE DRIVER's CUDA version, else the driver can't JIT
-# the generated PTX ("unsupported toolchain"). Driver here = CUDA 12.2 -> nvcc 12.2.
+# Match (or stay below) the node driver's CUDA version when possible, else the
+# driver can reject generated PTX ("unsupported toolchain"). vm_compat.sh sets
+# A100 to 12.2.2 by default, and H100 to 12.4.0 only when the driver advertises
+# CUDA >=12.4.
 CUDA_VER="${CUDA_REDIST_VER:-12.2.2}"
 BASE="https://developer.download.nvidia.com/compute/cuda/redist"
 DL="$CROPI_WORK/venvs/cuda_dl"
@@ -101,8 +108,8 @@ NVCC_MAJOR=$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p' | head -1)
 [[ "$NVCC_MAJOR" == "12" ]] || die "nvcc major=$NVCC_MAJOR, need 12 (set CUDA_REDIST_VER=12.4.x)"
 
 log "building fast_jl against cropi torch"
-# Build NATIVE for the GPU arch (A100 = sm_80) so no runtime PTX JIT is needed;
-# override TORCH_CUDA_ARCH_LIST for other GPUs (e.g. 8.6 for A6000, 9.0 for H100).
+# Build native cubins so runtime PTX JIT is avoided. vm_compat.sh sets A100=8.0
+# and H100=9.0; override TORCH_CUDA_ARCH_LIST for other GPUs.
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-8.0}"
 log "TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 # --no-deps is CRITICAL: without it, --force-reinstall cascades to reinstalling

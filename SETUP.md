@@ -7,6 +7,16 @@ upstream pipeline (`cropi/scripts/run_cropi.sh`). All heavy artefacts — uv ven
 models, data, HF cache, checkpoints — live under one workspace (`$CROPI_WORK`) so the
 home disk stays small.
 
+A100/H100 profiles and repair commands are in **[VM_COMPAT.md](VM_COMPAT.md)**.
+Use them when a VM has driver/CUDA/torch/vLLM drift:
+
+```bash
+source scripts/setup_env_a100.sh 4      # A100, sm_80
+source scripts/setup_env_h100.sh 8      # H100, sm_90
+bash scripts/repair_vm_libs.sh a100 verl
+bash scripts/repair_vm_libs.sh h100 all
+```
+
 > These scripts mirror our weasel/tads conventions: source `scripts/setup_env.sh`
 > once per shell, then run stage scripts. `setup_env.sh` only **warns** about missing
 > paths — it never aborts your shell.
@@ -42,9 +52,10 @@ bash scripts/install.sh all            # bootstraps uv, then builds the cropi + 
 ```
 - **cropi** is installed exactly per the upstream README (torch 2.4.0 cu124, `-e .`,
   `traker`, `fast_jl`). `fast_jl` compiles a CUDA extension — it needs a **CUDA 12.x
-  toolkit (`nvcc`)** on PATH. Most GPU images ship it; if the build fails, install the
-  toolkit and re-run `bash scripts/install.sh cropi`. If the uv shell installer is
-  blocked on your VM, `install.sh` falls back to `python3 -m pip install --user uv`.
+  toolkit (`nvcc`)** on PATH. Most GPU images ship it; if not, the install now leaves
+  `fast_jl` for `bash scripts/setup_cuda_venv.sh`, which assembles a CUDA toolkit under
+  `$CROPI_WORK` and rebuilds the extension. If the uv shell installer is blocked on your
+  VM, `install.sh` falls back to `python3 -m pip install --user uv`.
 - **verl** is the version-sensitive part (torch/vLLM/flash-attn are coupled). `install.sh
   verl` now pins a **verified-compatible matrix** by default (installed in this order):
   `torch==2.6.0` (cu124) → `vllm==0.8.5` → `verl==0.4.1` → `tensordict==0.6.2`.
@@ -59,6 +70,8 @@ bash scripts/install.sh all            # bootstraps uv, then builds the cropi + 
     (see the [verl vLLM>=0.8 guide](https://verl.readthedocs.io/en/latest/README_vllm0.8.html)).
   - Override per your CUDA with `VERL_PIP_SPEC`, `VLLM_PIP_SPEC`, `VERL_TORCH_SPEC`,
     `TENSORDICT_SPEC` (or `TORCH_SPEC`/`VLLM_SPEC` for `install_venv.sh`).
+  - `scripts/vm_compat.sh` centralizes these defaults so A100/H100 setup, install,
+    preflight, and repair scripts use the same matrix.
   If you already have a working verl env elsewhere, skip this and just
   `export RL_PYTHON=/path/to/verl-env/bin/python`.
 
@@ -186,6 +199,10 @@ so the next CROPI round reuses it directly.
 - **verl / vLLM version drift** is the usual failure point (mirrors weasel's AgentLab
   caveat). The **cropi** side (scoring/selection) is version-stable; only the **verl**
   env is sensitive. Pin via `VERL_PIP_SPEC` and follow the verl install guide.
+- **A100/H100 drift repair** — if a VM already has a bad env, do not blindly
+  `pip install -U verl vllm`. Source the profile, then run
+  `bash scripts/repair_vm_libs.sh a100 verl` or
+  `bash scripts/repair_vm_libs.sh h100 verl`.
 - **Disk** — one base model + 2 RL rounds + venvs + HF cache fit comfortably in ~80GB;
   budget more if you keep every `iter*/global_step_*` checkpoint. On ephemeral instance
   storage, copy `checkpoints/**/huggingface/` and selected parquet off `$CROPI_WORK`
