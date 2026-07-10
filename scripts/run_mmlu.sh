@@ -106,20 +106,11 @@ if want eval; then
 fi
 
 if want compare; then
-  log "Phase 7: comparison"
-  run "python - <<'PY'
-import json, os
-rd = os.environ['RESULTS_DIR']; ds='${DATASET}'
-rows=[]
-for tag in (f'{ds}_full', f'{ds}_cropi10'):
-    p=os.path.join(rd, tag+'.json')
-    if os.path.exists(p): rows.append(json.load(open(p)))
-print('\n=== mmlu: full(100%) vs CROPI(10%), matched steps=${TOTAL_STEPS} ===')
-for r in rows:
-    print(f\"  {r['tag']:16s} acc={r['accuracy']:.4f}  ({int(r['correct'])}/{r['n']})\")
-if len(rows)==2:
-    print(f\"  delta (cropi - full) = {rows[1]['accuracy']-rows[0]['accuracy']:+.4f}\")
-PY"
+  log "Phase 7: comparison report"
+  run "'${RL_PYTHON}' '${REPO_ROOT}/cropi/eval/make_report.py' \
+        --results-dir '${RESULTS_DIR}' --dataset '${DATASET}' \
+        --steps '${TOTAL_STEPS}' --rounds '${NUM_RL_ROUNDS}' --select-ratio 10 \
+        --out '${RESULTS_DIR}/${DATASET}_report.md'"
 fi
 
 log "done. results in ${RESULTS_DIR}"
